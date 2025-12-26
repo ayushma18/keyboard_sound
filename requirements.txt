@@ -1,0 +1,4 @@
+# Required Python libraries for keyboard acoustic recording app
+sounddevice>=0.4.6
+numpy>=1.21.0
+pynput>=1.7.6
