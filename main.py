@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, ttk, simpledialog
 import threading
 import time
 import sounddevice as sd
@@ -10,6 +10,7 @@ import csv
 from pynput import keyboard
 from datetime import datetime
 import queue
+import json
 
 
 class ResearchApp:
@@ -48,15 +49,21 @@ class ResearchApp:
         # Noise threshold for filtering
         self.noise_threshold = 0.001  # Minimum RMS level to consider as valid signal
         
-        # Output directories
-        self.output_dir = "recordings"
-        try:
-            os.makedirs(self.output_dir, exist_ok=True)
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to create output directory: {e}")
+        # Microphone and Keyboard IDs
+        self.mic_id = "mic1"
+        self.keyboard_id = "kb1"
+        self.session_folder = None
         
-        self.metadata_file = os.path.join(self.output_dir, "metadata.csv")
-        self.metadata_fields = ["timestamp", "key", "wav_file", "rms_level", "peak_level", "quality"]
+        # Output directories - will be set based on mic/keyboard IDs
+        self.base_output_dir = "recordings"
+        self.output_dir = None
+        self.metadata_file = None
+        self.metadata_fields = ["timestamp", "key", "wav_file", "rms_level", "peak_level", "quality", 
+                               "mic_id", "keyboard_id", "session_id"]
+        
+        # Configuration file for storing IDs
+        self.config_file = "recording_config.json"
+        self.load_config()
         
         # Threads
         self.audio_thread = None
@@ -68,7 +75,51 @@ class ResearchApp:
         # Build UI
         self.build_ui()
         
-        # Initialize metadata CSV
+        # Initialize output directory
+        self.update_output_directory()
+        
+        # Load available devices
+        self.load_audio_devices()
+
+    def load_config(self):
+        """Load configuration from file"""
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r') as f:
+                    config = json.load(f)
+                    self.mic_id = config.get('mic_id', 'mic1')
+                    self.keyboard_id = config.get('keyboard_id', 'kb1')
+        except Exception as e:
+            print(f"Error loading config: {e}")
+
+    def save_config(self):
+        """Save configuration to file"""
+        try:
+            config = {
+                'mic_id': self.mic_id,
+                'keyboard_id': self.keyboard_id
+            }
+            with open(self.config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+        except Exception as e:
+            print(f"Error saving config: {e}")
+
+    def update_output_directory(self):
+        """Update output directory based on mic and keyboard IDs"""
+        # Create folder structure: recordings/micid-keyboardid/
+        self.session_folder = f"{self.mic_id}-{self.keyboard_id}"
+        self.output_dir = os.path.join(self.base_output_dir, self.session_folder)
+        
+        try:
+            os.makedirs(self.output_dir, exist_ok=True)
+            print(f"Output directory: {self.output_dir}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to create output directory: {e}")
+        
+        # Update metadata file path
+        self.metadata_file = os.path.join(self.output_dir, "metadata.csv")
+        
+        # Initialize metadata CSV if it doesn't exist
         if not os.path.exists(self.metadata_file):
             try:
                 with open(self.metadata_file, "w", newline="") as f:
@@ -77,8 +128,9 @@ class ResearchApp:
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to initialize metadata file: {e}")
         
-        # Load available devices
-        self.load_audio_devices()
+        # Update UI label
+        if hasattr(self, 'folder_label'):
+            self.folder_label.config(text=f"Recording to: {self.session_folder}/")
 
     def build_ui(self):
         # Main container
@@ -89,6 +141,42 @@ class ResearchApp:
         title_label = tk.Label(main_frame, text="Keyboard Acoustic Recorder", 
                               font=("Arial", 16, "bold"))
         title_label.pack(pady=(0, 10))
+        
+        # Microphone and Keyboard ID Section
+        id_frame = tk.LabelFrame(main_frame, text="Session Configuration", 
+                                font=("Arial", 10, "bold"), padx=10, pady=10)
+        id_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Mic ID
+        mic_row = tk.Frame(id_frame)
+        mic_row.pack(fill=tk.X, pady=5)
+        tk.Label(mic_row, text="Microphone ID:", width=15, anchor=tk.W).pack(side=tk.LEFT, padx=5)
+        self.mic_id_entry = tk.Entry(mic_row, width=20)
+        self.mic_id_entry.insert(0, self.mic_id)
+        self.mic_id_entry.pack(side=tk.LEFT, padx=5)
+        tk.Label(mic_row, text="(e.g., mic1, mic2, blue_yeti)", fg="gray", font=("Arial", 8)).pack(side=tk.LEFT, padx=5)
+        
+        # Keyboard ID
+        kb_row = tk.Frame(id_frame)
+        kb_row.pack(fill=tk.X, pady=5)
+        tk.Label(kb_row, text="Keyboard ID:", width=15, anchor=tk.W).pack(side=tk.LEFT, padx=5)
+        self.keyboard_id_entry = tk.Entry(kb_row, width=20)
+        self.keyboard_id_entry.insert(0, self.keyboard_id)
+        self.keyboard_id_entry.pack(side=tk.LEFT, padx=5)
+        tk.Label(kb_row, text="(e.g., kb1, mechanical, laptop)", fg="gray", font=("Arial", 8)).pack(side=tk.LEFT, padx=5)
+        
+        # Update button
+        update_btn_row = tk.Frame(id_frame)
+        update_btn_row.pack(fill=tk.X, pady=5)
+        self.update_ids_btn = tk.Button(update_btn_row, text="Update Session IDs", 
+                                       command=self.update_session_ids,
+                                       bg="#FF9800", fg="white", font=("Arial", 9, "bold"))
+        self.update_ids_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Current folder display
+        self.folder_label = tk.Label(id_frame, text=f"Recording to: {self.mic_id}-{self.keyboard_id}/", 
+                                    font=("Arial", 9, "bold"), fg="#1976D2")
+        self.folder_label.pack(pady=5)
         
         # Device Selection Section
         device_frame = tk.LabelFrame(main_frame, text="Audio Device Selection", 
@@ -174,17 +262,47 @@ class ResearchApp:
         self.stop_button.pack(side=tk.LEFT, padx=5)
         
         # Info Label
-        info_text = "Instructions: Select audio device, test microphone, then start recording.\nType on your keyboard - each keystroke will be saved with its audio signature.\nKey repeats are automatically filtered (one recording per key press)."
+        info_text = "Instructions:\n1. Set Microphone ID and Keyboard ID for this session\n2. Select audio device and test microphone\n3. Start recording and type on your keyboard\n\nEach mic/keyboard combination will be saved in a separate folder."
         info_label = tk.Label(main_frame, text=info_text, 
                             font=("Arial", 9), fg="gray", justify=tk.LEFT)
         info_label.pack(pady=(10, 0))
         
         # Set minimum window size
-        self.root.minsize(650, 600)
+        self.root.minsize(700, 650)
         
         # Initialize stats
         self.keys_recorded = 0
         self.keys_rejected = 0
+        self.session_id = None
+
+    def update_session_ids(self):
+        """Update microphone and keyboard IDs from UI"""
+        new_mic_id = self.mic_id_entry.get().strip()
+        new_keyboard_id = self.keyboard_id_entry.get().strip()
+        
+        # Validate IDs (only alphanumeric, underscore, hyphen)
+        import re
+        if not re.match(r'^[a-zA-Z0-9_-]+$', new_mic_id):
+            messagebox.showerror("Invalid ID", "Microphone ID can only contain letters, numbers, underscore, and hyphen.")
+            return
+        
+        if not re.match(r'^[a-zA-Z0-9_-]+$', new_keyboard_id):
+            messagebox.showerror("Invalid ID", "Keyboard ID can only contain letters, numbers, underscore, and hyphen.")
+            return
+        
+        # Check if IDs changed
+        if new_mic_id != self.mic_id or new_keyboard_id != self.keyboard_id:
+            self.mic_id = new_mic_id
+            self.keyboard_id = new_keyboard_id
+            
+            # Save config
+            self.save_config()
+            
+            # Update output directory
+            self.update_output_directory()
+            
+            messagebox.showinfo("Session Updated", 
+                              f"Session IDs updated!\n\nRecordings will be saved to:\n{self.session_folder}/")
 
     def update_threshold(self, value):
         """Update noise threshold value"""
@@ -352,6 +470,9 @@ class ResearchApp:
             messagebox.showerror("Error", "Please enter a valid recording duration in seconds.")
             return
         
+        # Generate unique session ID for this recording session
+        self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
         self.remaining_time = self.recording_duration
         self.update_timer_label()
         
@@ -363,10 +484,11 @@ class ResearchApp:
         self.stats_label.config(text="Keys recorded: 0 | Rejected (noise): 0")
         self.root.after(1000, self.countdown_timer)
         
-        self.status_label.config(text="Status: Recording... Type on your keyboard!", fg="red")
+        self.status_label.config(text=f"Status: Recording session {self.session_id}... Type on your keyboard!", fg="red")
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
         self.test_button.config(state=tk.DISABLED)
+        self.update_ids_btn.config(state=tk.DISABLED)  # Prevent changing IDs during recording
         
         # Reset audio buffer properly
         with self.buffer_lock:
@@ -377,6 +499,14 @@ class ResearchApp:
         
         self.keyboard_thread = threading.Thread(target=self.listen_keyboard, daemon=True)
         self.keyboard_thread.start()
+        
+        print(f"\n{'='*60}")
+        print(f"RECORDING SESSION STARTED")
+        print(f"Session ID: {self.session_id}")
+        print(f"Microphone: {self.mic_id}")
+        print(f"Keyboard: {self.keyboard_id}")
+        print(f"Output folder: {self.output_dir}")
+        print(f"{'='*60}\n")
 
     def stop_recording(self):
         """Stop recording"""
@@ -387,12 +517,20 @@ class ResearchApp:
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         self.test_button.config(state=tk.NORMAL)
+        self.update_ids_btn.config(state=tk.NORMAL)  # Re-enable ID changes
         
         if self.listener:
             try:
                 self.listener.stop()
             except Exception as e:
                 print(f"Error stopping keyboard listener: {e}")
+        
+        print(f"\n{'='*60}")
+        print(f"RECORDING SESSION ENDED")
+        print(f"Session ID: {self.session_id}")
+        print(f"Total keys recorded: {self.keys_recorded}")
+        print(f"Total keys rejected: {self.keys_rejected}")
+        print(f"{'='*60}\n")
 
     def countdown_timer(self):
         """Update countdown timer"""
@@ -556,7 +694,7 @@ class ResearchApp:
                 wf.setframerate(self.fs)
                 wf.writeframes(segment_int16.tobytes())
             
-            # Write metadata with audio levels and quality
+            # Write metadata with audio levels, quality, and session info
             with open(self.metadata_file, "a", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=self.metadata_fields)
                 writer.writerow({
@@ -565,14 +703,17 @@ class ResearchApp:
                     "wav_file": wav_filename,
                     "rms_level": f"{rms_level:.6f}",
                     "peak_level": f"{peak_level:.6f}",
-                    "quality": quality
+                    "quality": quality,
+                    "mic_id": self.mic_id,
+                    "keyboard_id": self.keyboard_id,
+                    "session_id": self.session_id
                 })
             
             # Update stats
             self.keys_recorded += 1
             self.root.after(0, self.update_stats)
             
-            print(f"SAVED [{quality}]: {key_label} -> {wav_filename} (RMS: {rms_level:.4f}, Peak: {peak_level:.4f})")
+            print(f"SAVED [{quality}]: {key_label} -> {self.session_folder}/{wav_filename} (RMS: {rms_level:.4f}, Peak: {peak_level:.4f})")
             
         except Exception as e:
             print(f"Error saving key audio: {e}")
