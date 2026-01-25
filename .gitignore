@@ -17,3 +17,8 @@ recordings/metadata.csv
 
 # Env
 .env
+
+
+#venv
+venv
+myenv
