@@ -262,7 +262,7 @@ class ResearchApp:
         self.stop_button.pack(side=tk.LEFT, padx=5)
         
         # Info Label
-        info_text = "Instructions:\n1. Set Microphone ID and Keyboard ID for this session\n2. Select audio device and test microphone\n3. Start recording and type on your keyboard\n\nEach mic/keyboard combination will be saved in a separate folder."
+        info_text = "Instructions:\n1. Set Microphone ID and Keyboard ID for this session\n2. Select audio device and test microphone\n3. Start recording and type on your keyboard\n\nEach key's audio will be saved in its own subfolder (e.g., a/, b/, space/, etc.)"
         info_label = tk.Label(main_frame, text=info_text, 
                             font=("Arial", 9), fg="gray", justify=tk.LEFT)
         info_label.pack(pady=(10, 0))
@@ -506,6 +506,7 @@ class ResearchApp:
         print(f"Microphone: {self.mic_id}")
         print(f"Keyboard: {self.keyboard_id}")
         print(f"Output folder: {self.output_dir}")
+        print(f"Sounds will be organized into key-specific subfolders")
         print(f"{'='*60}\n")
 
     def stop_recording(self):
@@ -639,13 +640,25 @@ class ResearchApp:
             self.root.after(0, self.stop_recording)
 
     def save_key_audio(self, key_label):
-        """Extract audio segment from buffer and save as WAV with noise filtering"""
+        """Extract audio segment from buffer and save as WAV with noise filtering in key-specific subfolders"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         
-        # Clean key label for filename
+        # Clean key label for filename and folder
         clean_key = key_label.replace("Key.", "").replace(".", "_")
+        
+        # Create key-specific subfolder
+        key_folder = os.path.join(self.output_dir, clean_key)
+        try:
+            os.makedirs(key_folder, exist_ok=True)
+        except Exception as e:
+            print(f"Error creating key folder {key_folder}: {e}")
+            return
+        
         wav_filename = f"{clean_key}_{timestamp}.wav"
-        wav_path = os.path.join(self.output_dir, wav_filename)
+        wav_path = os.path.join(key_folder, wav_filename)
+        
+        # Update the relative path for metadata (includes subfolder)
+        relative_wav_path = f"{clean_key}/{wav_filename}"
         
         try:
             # Extract the most recent segment
@@ -700,7 +713,7 @@ class ResearchApp:
                 writer.writerow({
                     "timestamp": timestamp,
                     "key": key_label,
-                    "wav_file": wav_filename,
+                    "wav_file": relative_wav_path,  # Include subfolder in path
                     "rms_level": f"{rms_level:.6f}",
                     "peak_level": f"{peak_level:.6f}",
                     "quality": quality,
@@ -713,7 +726,7 @@ class ResearchApp:
             self.keys_recorded += 1
             self.root.after(0, self.update_stats)
             
-            print(f"SAVED [{quality}]: {key_label} -> {self.session_folder}/{wav_filename} (RMS: {rms_level:.4f}, Peak: {peak_level:.4f})")
+            print(f"SAVED [{quality}]: {key_label} -> {self.session_folder}/{relative_wav_path} (RMS: {rms_level:.4f}, Peak: {peak_level:.4f})")
             
         except Exception as e:
             print(f"Error saving key audio: {e}")
