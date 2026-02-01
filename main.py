@@ -11,6 +11,7 @@ from pynput import keyboard
 from datetime import datetime
 import queue
 import json
+from scipy import signal
 
 
 class ResearchApp:
@@ -37,17 +38,28 @@ class ResearchApp:
         self.audio_buffer = np.zeros(self.buffer_samples, dtype=np.float32)
         self.buffer_lock = threading.Lock()
         
+        # NOISE PROFILE for spectral subtraction
+        self.noise_profile = None
+        self.noise_profile_lock = threading.Lock()
+        self.calibrating_noise = False
+        
         # KEY DEBOUNCING: Track pressed keys and timing
         self.pressed_keys = {}  # key -> timestamp of last recording
         self.key_debounce_time = 0.15  # minimum time between same key recordings (seconds)
         self.keys_lock = threading.Lock()
         
-        # Audio device
+        # Audio devices
         self.input_device = None
-        self.device_list = []
+        self.output_device = None
+        self.input_device_list = []
+        self.output_device_list = []
         
         # Noise threshold for filtering
         self.noise_threshold = 0.001  # Minimum RMS level to consider as valid signal
+        
+        # Noise reduction parameters
+        self.noise_reduction_strength = 1.5  # How aggressively to reduce noise
+        self.enable_noise_reduction = True
         
         # Microphone and Keyboard IDs
         self.mic_id = "mic1"
@@ -183,16 +195,60 @@ class ResearchApp:
                                      font=("Arial", 10, "bold"), padx=10, pady=10)
         device_frame.pack(fill=tk.X, pady=(0, 10))
         
+        # Input device
         tk.Label(device_frame, text="Input Device:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.device_var = tk.StringVar()
-        self.device_combo = ttk.Combobox(device_frame, textvariable=self.device_var, 
+        self.input_device_var = tk.StringVar()
+        self.input_device_combo = ttk.Combobox(device_frame, textvariable=self.input_device_var, 
                                          width=50, state="readonly")
-        self.device_combo.grid(row=0, column=1, padx=5, pady=5)
-        self.device_combo.bind("<<ComboboxSelected>>", self.on_device_selected)
+        self.input_device_combo.grid(row=0, column=1, padx=5, pady=5)
+        self.input_device_combo.bind("<<ComboboxSelected>>", self.on_input_device_selected)
+        
+        # Output device
+        tk.Label(device_frame, text="Output Device:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.output_device_var = tk.StringVar()
+        self.output_device_combo = ttk.Combobox(device_frame, textvariable=self.output_device_var, 
+                                         width=50, state="readonly")
+        self.output_device_combo.grid(row=1, column=1, padx=5, pady=5)
+        self.output_device_combo.bind("<<ComboboxSelected>>", self.on_output_device_selected)
         
         refresh_btn = tk.Button(device_frame, text="Refresh Devices", 
                                command=self.load_audio_devices)
-        refresh_btn.grid(row=0, column=2, padx=5, pady=5)
+        refresh_btn.grid(row=0, column=2, rowspan=2, padx=5, pady=5)
+        
+        # Noise Calibration Section
+        noise_frame = tk.LabelFrame(main_frame, text="Noise Reduction", 
+                                   font=("Arial", 10, "bold"), padx=10, pady=10)
+        noise_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        calibrate_row = tk.Frame(noise_frame)
+        calibrate_row.pack(fill=tk.X, pady=5)
+        
+        self.calibrate_button = tk.Button(calibrate_row, text="Calibrate Background Noise (2 sec)", 
+                                         command=self.calibrate_noise,
+                                         bg="#9C27B0", fg="white", font=("Arial", 9, "bold"))
+        self.calibrate_button.pack(side=tk.LEFT, padx=5)
+        
+        self.noise_status_label = tk.Label(calibrate_row, text="Not calibrated", 
+                                          fg="orange", font=("Arial", 9))
+        self.noise_status_label.pack(side=tk.LEFT, padx=10)
+        
+        # Noise reduction controls
+        nr_controls = tk.Frame(noise_frame)
+        nr_controls.pack(fill=tk.X, pady=5)
+        
+        self.nr_var = tk.BooleanVar(value=True)
+        nr_check = tk.Checkbutton(nr_controls, text="Enable Noise Reduction", 
+                                 variable=self.nr_var, command=self.toggle_noise_reduction)
+        nr_check.pack(side=tk.LEFT, padx=5)
+        
+        tk.Label(nr_controls, text="Strength:").pack(side=tk.LEFT, padx=5)
+        self.nr_strength_var = tk.DoubleVar(value=1.5)
+        nr_scale = tk.Scale(nr_controls, from_=0.5, to=3.0, resolution=0.1,
+                           orient=tk.HORIZONTAL, variable=self.nr_strength_var,
+                           length=150, command=self.update_nr_strength)
+        nr_scale.pack(side=tk.LEFT, padx=5)
+        self.nr_strength_label = tk.Label(nr_controls, text="1.5")
+        self.nr_strength_label.pack(side=tk.LEFT, padx=5)
         
         # Microphone Test Section
         test_frame = tk.LabelFrame(main_frame, text="Microphone Test", 
@@ -217,15 +273,15 @@ class ResearchApp:
         self.build_duration_selector(duration_frame)
         
         # Noise threshold control
-        noise_frame = tk.Frame(duration_frame)
-        noise_frame.pack(pady=5)
-        tk.Label(noise_frame, text="Noise Threshold:").pack(side=tk.LEFT, padx=5)
+        threshold_frame = tk.Frame(duration_frame)
+        threshold_frame.pack(pady=5)
+        tk.Label(threshold_frame, text="Noise Threshold:").pack(side=tk.LEFT, padx=5)
         self.threshold_var = tk.DoubleVar(value=0.001)
-        threshold_scale = tk.Scale(noise_frame, from_=0.0001, to=0.01, resolution=0.0001,
+        threshold_scale = tk.Scale(threshold_frame, from_=0.0001, to=0.01, resolution=0.0001,
                                   orient=tk.HORIZONTAL, variable=self.threshold_var,
                                   length=200, command=self.update_threshold)
         threshold_scale.pack(side=tk.LEFT, padx=5)
-        self.threshold_label = tk.Label(noise_frame, text="0.0010")
+        self.threshold_label = tk.Label(threshold_frame, text="0.0010")
         self.threshold_label.pack(side=tk.LEFT, padx=5)
         
         # Timer Display
@@ -262,18 +318,167 @@ class ResearchApp:
         self.stop_button.pack(side=tk.LEFT, padx=5)
         
         # Info Label
-        info_text = "Instructions:\n1. Set Microphone ID and Keyboard ID for this session\n2. Select audio device and test microphone\n3. Start recording and type on your keyboard\n\nEach key's audio will be saved in its own subfolder (e.g., a/, b/, space/, etc.)"
+        info_text = "Instructions:\n1. Set Microphone ID and Keyboard ID\n2. Select audio device\n3. Calibrate background noise (stay quiet for 2 seconds)\n4. Test microphone\n5. Start recording and type!\n\nTip: Calibrate noise in your recording environment for best results."
         info_label = tk.Label(main_frame, text=info_text, 
                             font=("Arial", 9), fg="gray", justify=tk.LEFT)
         info_label.pack(pady=(10, 0))
         
         # Set minimum window size
-        self.root.minsize(700, 650)
+        self.root.minsize(700, 750)
         
         # Initialize stats
         self.keys_recorded = 0
         self.keys_rejected = 0
         self.session_id = None
+
+    def toggle_noise_reduction(self):
+        """Toggle noise reduction on/off"""
+        self.enable_noise_reduction = self.nr_var.get()
+        status = "enabled" if self.enable_noise_reduction else "disabled"
+        print(f"Noise reduction {status}")
+
+    def update_nr_strength(self, value):
+        """Update noise reduction strength"""
+        self.noise_reduction_strength = float(value)
+        self.nr_strength_label.config(text=f"{self.noise_reduction_strength:.1f}")
+
+    def calibrate_noise(self):
+        """Calibrate background noise profile"""
+        if self.input_device is None:
+            messagebox.showerror("Error", "Please select an audio input device first!")
+            return
+        
+        if self.is_recording or self.is_testing_mic:
+            messagebox.showwarning("Warning", "Please stop other operations before calibrating.")
+            return
+        
+        self.calibrating_noise = True
+        self.calibrate_button.config(state=tk.DISABLED, text="Calibrating...")
+        self.noise_status_label.config(text="Stay quiet...", fg="orange")
+        
+        # Run calibration in thread
+        threading.Thread(target=self.run_noise_calibration, daemon=True).start()
+
+    def run_noise_calibration(self):
+        """Record background noise and create noise profile"""
+        try:
+            duration = 2.0  # seconds
+            samples = int(self.fs * duration)
+            
+            # Record background noise
+            noise_data = sd.rec(samples, samplerate=self.fs, channels=1, 
+                               dtype='float32', device=self.input_device)
+            sd.wait()
+            
+            noise_signal = noise_data[:, 0]
+            
+            # Compute noise profile (power spectrum)
+            # Use STFT to get frequency-domain representation
+            f, t, Zxx = signal.stft(noise_signal, fs=self.fs, nperseg=512)
+            noise_power = np.mean(np.abs(Zxx)**2, axis=1)
+            
+            with self.noise_profile_lock:
+                self.noise_profile = noise_power
+            
+            # Update UI
+            self.root.after(0, self.on_calibration_complete)
+            
+            print("Noise calibration complete")
+            print(f"Noise profile shape: {noise_power.shape}")
+            print(f"Mean noise power: {np.mean(noise_power):.6f}")
+            
+        except Exception as e:
+            self.root.after(0, messagebox.showerror, "Calibration Error", 
+                          f"Error during noise calibration: {e}")
+            self.root.after(0, self.on_calibration_failed)
+
+    def on_calibration_complete(self):
+        """Update UI after successful calibration"""
+        self.calibrating_noise = False
+        self.calibrate_button.config(state=tk.NORMAL, text="Recalibrate Background Noise")
+        self.noise_status_label.config(text="✓ Calibrated", fg="green")
+
+    def on_calibration_failed(self):
+        """Update UI after failed calibration"""
+        self.calibrating_noise = False
+        self.calibrate_button.config(state=tk.NORMAL, text="Calibrate Background Noise (2 sec)")
+        self.noise_status_label.config(text="Calibration failed", fg="red")
+
+    def apply_noise_reduction(self, audio_segment):
+        """Apply spectral subtraction noise reduction"""
+        if not self.enable_noise_reduction:
+            return audio_segment
+        
+        with self.noise_profile_lock:
+            if self.noise_profile is None:
+                # No calibration - apply simple high-pass filter only
+                return self.apply_highpass_filter(audio_segment)
+        
+        try:
+            # Perform STFT on the audio segment
+            f, t, Zxx = signal.stft(audio_segment, fs=self.fs, nperseg=512)
+            
+            # Get magnitude and phase
+            magnitude = np.abs(Zxx)
+            phase = np.angle(Zxx)
+            
+            # Spectral subtraction
+            with self.noise_profile_lock:
+                noise_magnitude = np.sqrt(self.noise_profile)
+            
+            # Ensure noise profile matches the frequency bins
+            if len(noise_magnitude) != magnitude.shape[0]:
+                # Resize noise profile to match
+                from scipy.interpolate import interp1d
+                old_freqs = np.linspace(0, 1, len(noise_magnitude))
+                new_freqs = np.linspace(0, 1, magnitude.shape[0])
+                f_interp = interp1d(old_freqs, noise_magnitude, kind='linear', fill_value='extrapolate')
+                noise_magnitude = f_interp(new_freqs)
+            
+            # Subtract noise (with floor to prevent negative values)
+            noise_magnitude = noise_magnitude.reshape(-1, 1)
+            reduced_magnitude = np.maximum(
+                magnitude - self.noise_reduction_strength * noise_magnitude, 
+                magnitude * 0.1  # Keep at least 10% of original to preserve signal
+            )
+            
+            # Reconstruct complex spectrum
+            Zxx_reduced = reduced_magnitude * np.exp(1j * phase)
+            
+            # Inverse STFT
+            _, audio_reduced = signal.istft(Zxx_reduced, fs=self.fs, nperseg=512)
+            
+            # Ensure output length matches input
+            if len(audio_reduced) > len(audio_segment):
+                audio_reduced = audio_reduced[:len(audio_segment)]
+            elif len(audio_reduced) < len(audio_segment):
+                audio_reduced = np.pad(audio_reduced, (0, len(audio_segment) - len(audio_reduced)))
+            
+            # Apply additional high-pass filter to remove low-frequency rumble
+            audio_reduced = self.apply_highpass_filter(audio_reduced)
+            
+            return audio_reduced.astype(np.float32)
+            
+        except Exception as e:
+            print(f"Error in noise reduction: {e}")
+            # Fallback to simple filtering
+            return self.apply_highpass_filter(audio_segment)
+
+    def apply_highpass_filter(self, audio_segment):
+        """Apply high-pass filter to remove low-frequency noise"""
+        try:
+            # Design Butterworth high-pass filter (cutoff at 80 Hz)
+            nyquist = self.fs / 2
+            cutoff = 80  # Hz
+            order = 4
+            
+            b, a = signal.butter(order, cutoff / nyquist, btype='high')
+            filtered = signal.filtfilt(b, a, audio_segment)
+            
+            return filtered.astype(np.float32)
+        except Exception as e:
+            print(f"Error in high-pass filter: {e}")
+            return audio_segment
 
     def update_session_ids(self):
         """Update microphone and keyboard IDs from UI"""
@@ -335,43 +540,100 @@ class ResearchApp:
             self.custom_entry.insert(0, value)
 
     def load_audio_devices(self):
-        """Load and display available audio input devices"""
+        """Load and display available audio input and output devices"""
         try:
             devices = sd.query_devices()
-            self.device_list = []
-            device_names = []
+            self.input_device_list = []
+            self.output_device_list = []
+            input_device_names = []
+            output_device_names = []
             
             for i, device in enumerate(devices):
+                # Input devices
                 if device['max_input_channels'] > 0:
-                    self.device_list.append(i)
-                    device_name = f"{i}: {device['name']} (Channels: {device['max_input_channels']})"
-                    device_names.append(device_name)
+                    self.input_device_list.append(i)
+                    device_name = f"{i}: {device['name']} (In: {device['max_input_channels']})"
+                    input_device_names.append(device_name)
+                
+                # Output devices
+                if device['max_output_channels'] > 0:
+                    self.output_device_list.append(i)
+                    device_name = f"{i}: {device['name']} (Out: {device['max_output_channels']})"
+                    output_device_names.append(device_name)
             
-            if not self.device_list:
+            # Set input devices
+            if not self.input_device_list:
                 messagebox.showerror("Error", "No audio input devices found!")
                 self.status_label.config(text="Status: No input devices available", fg="red")
                 return
             
-            self.device_combo['values'] = device_names
-            if device_names:
-                self.device_combo.current(0)
-                self.input_device = self.device_list[0]
-                self.status_label.config(text=f"Status: Device selected - {device_names[0]}", fg="green")
+            self.input_device_combo['values'] = input_device_names
+            if input_device_names:
+                self.input_device_combo.current(0)
+                self.input_device = self.input_device_list[0]
+            
+            # Set output devices
+            if not self.output_device_list:
+                messagebox.showwarning("Warning", "No audio output devices found! Live playback won't work.")
+                self.output_device = None
+            else:
+                self.output_device_combo['values'] = output_device_names
+                if output_device_names:
+                    # Try to find default output device
+                    default_output = sd.default.device[1]
+                    if default_output in self.output_device_list:
+                        default_idx = self.output_device_list.index(default_output)
+                        self.output_device_combo.current(default_idx)
+                        self.output_device = default_output
+                    else:
+                        self.output_device_combo.current(0)
+                        self.output_device = self.output_device_list[0]
+            
+            status_text = f"Status: Input: {input_device_names[0] if input_device_names else 'None'}"
+            if self.output_device is not None:
+                status_text += f" | Output: Device {self.output_device}"
+            self.status_label.config(text=status_text, fg="green")
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load audio devices: {e}")
             self.status_label.config(text=f"Status: Error loading devices", fg="red")
 
-    def on_device_selected(self, event):
-        """Handle device selection"""
+    def on_input_device_selected(self, event):
+        """Handle input device selection"""
         try:
-            selected_index = self.device_combo.current()
+            selected_index = self.input_device_combo.current()
             if selected_index >= 0:
-                self.input_device = self.device_list[selected_index]
-                device_name = self.device_combo.get()
-                self.status_label.config(text=f"Status: Device selected - {device_name}", fg="green")
+                self.input_device = self.input_device_list[selected_index]
+                device_name = self.input_device_combo.get()
+                print(f"Input device selected: {device_name}")
+                self.update_device_status()
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to select device: {e}")
+            messagebox.showerror("Error", f"Failed to select input device: {e}")
+    
+    def on_output_device_selected(self, event):
+        """Handle output device selection"""
+        try:
+            selected_index = self.output_device_combo.current()
+            if selected_index >= 0:
+                self.output_device = self.output_device_list[selected_index]
+                device_name = self.output_device_combo.get()
+                print(f"Output device selected: {device_name}")
+                self.update_device_status()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to select output device: {e}")
+    
+    def update_device_status(self):
+        """Update status label with current device selection"""
+        status_parts = []
+        if self.input_device is not None:
+            status_parts.append(f"Input: Device {self.input_device}")
+        if self.output_device is not None:
+            status_parts.append(f"Output: Device {self.output_device}")
+        
+        if status_parts:
+            self.status_label.config(text=f"Status: {' | '.join(status_parts)}", fg="green")
+        else:
+            self.status_label.config(text="Status: No devices selected", fg="orange")
 
     def toggle_mic_test(self):
         """Toggle microphone test with live playback"""
@@ -384,6 +646,10 @@ class ResearchApp:
         """Start microphone test with live audio playback"""
         if self.input_device is None:
             messagebox.showerror("Error", "Please select an audio input device first!")
+            return
+        
+        if self.output_device is None:
+            messagebox.showerror("Error", "Please select an audio output device for playback!")
             return
         
         self.is_testing_mic = True
@@ -411,21 +677,30 @@ class ResearchApp:
                 outdata[:] = np.zeros_like(outdata)
                 return
             
-            # Copy input to output for playback
-            outdata[:] = indata
+            # Apply noise reduction if enabled and calibrated
+            audio_in = indata[:, 0].copy()
+            if self.enable_noise_reduction and self.noise_profile is not None:
+                audio_filtered = self.apply_noise_reduction(audio_in)
+                outdata[:] = audio_filtered.reshape(-1, 1)
+            else:
+                # Just apply high-pass filter
+                audio_filtered = self.apply_highpass_filter(audio_in)
+                outdata[:] = audio_filtered.reshape(-1, 1)
             
             # Calculate audio level for display
-            level = np.sqrt(np.mean(indata**2)) * 100  # RMS level
+            level = np.sqrt(np.mean(audio_filtered**2)) * 100  # RMS level
             self.audio_queue.put(level)
         
         try:
-            # Open duplex stream (input and output)
-            with sd.Stream(device=(self.input_device, sd.default.device[1]),
+            # Open duplex stream with selected devices
+            with sd.Stream(device=(self.input_device, self.output_device),
                           channels=1, 
                           samplerate=self.fs,
                           dtype='float32',
                           blocksize=2048,
                           callback=callback):
+                
+                print(f"Mic test started: Input={self.input_device}, Output={self.output_device}")
                 
                 while self.is_testing_mic:
                     try:
@@ -439,7 +714,7 @@ class ResearchApp:
                     
         except Exception as e:
             self.root.after(0, messagebox.showerror, "Microphone Test Error", 
-                          f"Error during mic test: {e}\n\nMake sure your microphone is not being used by another application.")
+                          f"Error during mic test: {e}\n\nMake sure your devices are not being used by another application.")
             self.root.after(0, self.stop_mic_test)
 
     def update_level_display(self, level):
@@ -484,11 +759,13 @@ class ResearchApp:
         self.stats_label.config(text="Keys recorded: 0 | Rejected (noise): 0")
         self.root.after(1000, self.countdown_timer)
         
-        self.status_label.config(text=f"Status: Recording session {self.session_id}... Type on your keyboard!", fg="red")
+        nr_status = "ON" if self.enable_noise_reduction else "OFF"
+        self.status_label.config(text=f"Status: Recording (Noise Reduction: {nr_status})... Type on your keyboard!", fg="red")
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
         self.test_button.config(state=tk.DISABLED)
-        self.update_ids_btn.config(state=tk.DISABLED)  # Prevent changing IDs during recording
+        self.update_ids_btn.config(state=tk.DISABLED)
+        self.calibrate_button.config(state=tk.DISABLED)
         
         # Reset audio buffer properly
         with self.buffer_lock:
@@ -506,7 +783,8 @@ class ResearchApp:
         print(f"Microphone: {self.mic_id}")
         print(f"Keyboard: {self.keyboard_id}")
         print(f"Output folder: {self.output_dir}")
-        print(f"Sounds will be organized into key-specific subfolders")
+        print(f"Noise Reduction: {nr_status} (Strength: {self.noise_reduction_strength})")
+        print(f"Noise Profile: {'Calibrated' if self.noise_profile is not None else 'Not calibrated'}")
         print(f"{'='*60}\n")
 
     def stop_recording(self):
@@ -518,7 +796,8 @@ class ResearchApp:
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         self.test_button.config(state=tk.NORMAL)
-        self.update_ids_btn.config(state=tk.NORMAL)  # Re-enable ID changes
+        self.update_ids_btn.config(state=tk.NORMAL)
+        self.calibrate_button.config(state=tk.NORMAL)
         
         if self.listener:
             try:
@@ -566,6 +845,10 @@ class ResearchApp:
             with self.buffer_lock:
                 # Extract float32 audio data correctly
                 audio_chunk = indata[:, 0].astype(np.float32).copy()
+                
+                # Apply noise reduction to incoming audio
+                if self.enable_noise_reduction:
+                    audio_chunk = self.apply_noise_reduction(audio_chunk)
                 
                 # Rolling buffer: shift left and append new frames
                 self.audio_buffer = np.roll(self.audio_buffer, -frames)
@@ -627,7 +910,6 @@ class ResearchApp:
                         print(f"Debounced: {k} (time since last: {time_since_last:.3f}s)")
         
         def on_release(key):
-            # Optional: could reset debounce timer on release for more precise control
             pass
         
         try:
@@ -665,7 +947,7 @@ class ResearchApp:
             with self.buffer_lock:
                 segment = self.audio_buffer[-self.segment_samples:].copy()
             
-            # Calculate audio levels
+            # Calculate audio levels BEFORE additional processing
             rms_level = np.sqrt(np.mean(segment**2))
             peak_level = np.max(np.abs(segment))
             
@@ -713,7 +995,7 @@ class ResearchApp:
                 writer.writerow({
                     "timestamp": timestamp,
                     "key": key_label,
-                    "wav_file": relative_wav_path,  # Include subfolder in path
+                    "wav_file": relative_wav_path,
                     "rms_level": f"{rms_level:.6f}",
                     "peak_level": f"{peak_level:.6f}",
                     "quality": quality,
