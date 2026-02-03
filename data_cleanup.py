@@ -32,11 +32,13 @@ class DataCleanupApp:
         # Playback control
         self.is_playing = False
         self.play_thread = None
+        self.playback_stream = None  # Added to track the stream
         
         # Threshold and filtering - IMPROVED
         self.threshold_value = 0.0001
         self.auto_threshold = 0.0001
         self.concentration_threshold = 0.3  # Energy concentration threshold
+        
         self.files_to_delete = set()
         self.stats = {
             'total': 0,
@@ -64,7 +66,7 @@ class DataCleanupApp:
         
         # Load sessions
         self.load_sessions()
-    
+
     def calculate_energy_concentration(self, audio, sample_rate):
         """
         Calculate energy concentration metric to distinguish keystroke from noise.
@@ -123,12 +125,12 @@ class DataCleanupApp:
         # Combined concentration score (weighted average)
         concentration_score = (
             top_concentration * 0.5 +      # 50% weight on top energy concentration
-            sharpness_normalized * 0.3 +    # 30% weight on temporal sharpness
-            peak_ratio_normalized * 0.2     # 20% weight on peak ratio
+            sharpness_normalized * 0.3 +   # 30% weight on temporal sharpness
+            peak_ratio_normalized * 0.2    # 20% weight on peak ratio
         )
         
         return min(concentration_score, 1.0)
-    
+
     def calculate_spectral_flatness(self, audio):
         """
         Calculate spectral flatness - noise has flatter spectrum, keystrokes have peaks.
@@ -146,14 +148,13 @@ class DataCleanupApp:
         arithmetic_mean = np.mean(magnitude)
         
         flatness = geometric_mean / arithmetic_mean
-        
         return flatness
-    
+
     def calculate_zero_crossing_rate(self, audio):
         """Calculate zero crossing rate - noise tends to have higher ZCR"""
         zero_crossings = np.sum(np.abs(np.diff(np.sign(audio)))) / (2 * len(audio))
         return zero_crossings
-    
+
     def is_likely_noise(self, audio, sample_rate, rms):
         """
         Determine if audio is likely noise based on multiple features.
@@ -211,7 +212,7 @@ class DataCleanupApp:
         reason_str = " | ".join(reasons) if reasons else f"Valid (Conc: {concentration:.3f}, RMS: {rms:.6f})"
         
         return is_noise, reason_str, concentration, details
-    
+
     def build_ui(self):
         # Create main container with left and right panels
         main_container = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, sashrelief=tk.RAISED)
@@ -249,7 +250,7 @@ class DataCleanupApp:
         
         self.build_left_panel(left_panel)
         self.build_right_panel(right_panel)
-    
+
     def build_left_panel(self, parent):
         # Title
         title = tk.Label(parent, text="Data Cleanup Tool", font=("Arial", 16, "bold"), fg="#1976D2")
@@ -266,53 +267,47 @@ class DataCleanupApp:
         session_btn_frame = tk.Frame(session_frame)
         session_btn_frame.pack(fill=tk.X, pady=5)
         
-        tk.Button(session_btn_frame, text="Refresh Sessions", command=self.load_sessions,
-                 bg="#4CAF50", fg="white", font=("Arial", 9)).pack(side=tk.LEFT, padx=2)
-        
-        tk.Button(session_btn_frame, text="Browse Folder", command=self.browse_folder,
-                 bg="#2196F3", fg="white", font=("Arial", 9)).pack(side=tk.LEFT, padx=2)
+        tk.Button(session_btn_frame, text="Refresh Sessions", command=self.load_sessions, 
+                  bg="#4CAF50", fg="white", font=("Arial", 9)).pack(side=tk.LEFT, padx=2)
+        tk.Button(session_btn_frame, text="Browse Folder", command=self.browse_folder, 
+                  bg="#2196F3", fg="white", font=("Arial", 9)).pack(side=tk.LEFT, padx=2)
         
         # Session Info
-        self.session_info_label = tk.Label(session_frame, text="No session selected", 
-                                           font=("Arial", 9), fg="gray")
+        self.session_info_label = tk.Label(session_frame, text="No session selected", font=("Arial", 9), fg="gray")
         self.session_info_label.pack(pady=5)
         
         # Detection Method
-        method_frame = tk.LabelFrame(parent, text="Detection Method", 
-                                     font=("Arial", 10, "bold"), padx=10, pady=10)
+        method_frame = tk.LabelFrame(parent, text="Detection Method", font=("Arial", 10, "bold"), padx=10, pady=10)
         method_frame.pack(fill=tk.X, padx=10, pady=5)
         
         tk.Checkbutton(method_frame, text="Use Energy Concentration Detection (Recommended)", 
-                      variable=self.use_concentration_detection,
-                      command=self.update_detection_method,
-                      font=("Arial", 9, "bold"), fg="#1976D2").pack(anchor=tk.W, pady=5)
+                       variable=self.use_concentration_detection, command=self.update_detection_method,
+                       font=("Arial", 9, "bold"), fg="#1976D2").pack(anchor=tk.W, pady=5)
         
-        tk.Label(method_frame, text="Detects keystrokes by energy concentration.\nKeystrokes = concentrated burst\nNoise = distributed energy", 
-                font=("Arial", 8), fg="gray", justify=tk.LEFT).pack(anchor=tk.W, pady=2)
+        tk.Label(method_frame, text="Detects keystrokes by energy concentration.\nKeystrokes = concentrated burst\nNoise = distributed energy",
+                 font=("Arial", 8), fg="gray", justify=tk.LEFT).pack(anchor=tk.W, pady=2)
         
         # Threshold Control
-        threshold_frame = tk.LabelFrame(parent, text="2. Adjust Detection Thresholds", 
-                                       font=("Arial", 10, "bold"), padx=10, pady=10)
+        threshold_frame = tk.LabelFrame(parent, text="2. Adjust Detection Thresholds", font=("Arial", 10, "bold"), padx=10, pady=10)
         threshold_frame.pack(fill=tk.X, padx=10, pady=5)
         
         # === PRIMARY: Concentration Threshold (Main Control) ===
         tk.Label(threshold_frame, text="PRIMARY: Energy Concentration Threshold", 
-                font=("Arial", 9, "bold"), fg="#9C27B0").pack(anchor=tk.W, pady=5)
+                 font=("Arial", 9, "bold"), fg="#9C27B0").pack(anchor=tk.W, pady=5)
         
-        tk.Label(threshold_frame, text="Higher = stricter (only very concentrated sounds pass)\nLower = more lenient (distributed sounds may pass)", 
-                font=("Arial", 8), fg="gray", justify=tk.LEFT).pack(anchor=tk.W, pady=2)
+        tk.Label(threshold_frame, text="Higher = stricter (only very concentrated sounds pass)\nLower = more lenient (distributed sounds may pass)",
+                 font=("Arial", 8), fg="gray", justify=tk.LEFT).pack(anchor=tk.W, pady=2)
         
         conc_control = tk.Frame(threshold_frame)
         conc_control.pack(fill=tk.X, pady=5)
         
-        self.conc_scale = tk.Scale(conc_control, from_=0.05, to=0.9,
-                                   resolution=0.01, orient=tk.HORIZONTAL,
-                                   command=self.on_concentration_change, length=250)
+        self.conc_scale = tk.Scale(conc_control, from_=0.05, to=0.9, resolution=0.01, 
+                                    orient=tk.HORIZONTAL, command=self.on_concentration_change, length=250)
         self.conc_scale.set(self.concentration_threshold)
         self.conc_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
-        self.conc_value_label = tk.Label(conc_control, text=f"{self.concentration_threshold:.2f}",
-                                         font=("Arial", 12, "bold"), fg="#9C27B0", width=8)
+        self.conc_value_label = tk.Label(conc_control, text=f"{self.concentration_threshold:.2f}", 
+                                          font=("Arial", 12, "bold"), fg="#9C27B0", width=8)
         self.conc_value_label.pack(side=tk.LEFT, padx=5)
         
         # Concentration presets
@@ -329,26 +324,25 @@ class DataCleanupApp:
         ]
         
         for name, value in conc_presets:
-            tk.Button(conc_preset_frame, text=name, 
-                     command=lambda v=value: self.set_concentration_threshold(v),
-                     font=("Arial", 8), width=10).pack(side=tk.LEFT, padx=2)
+            tk.Button(conc_preset_frame, text=name, command=lambda v=value: self.set_concentration_threshold(v),
+                      font=("Arial", 8), width=10).pack(side=tk.LEFT, padx=2)
         
         # Separator
         tk.Frame(threshold_frame, height=2, bg="gray").pack(fill=tk.X, pady=10)
         
         # === SECONDARY: RMS Threshold (Fallback/Override) ===
         tk.Label(threshold_frame, text="SECONDARY: RMS Threshold (Override for very quiet sounds)", 
-                font=("Arial", 9, "bold"), fg="#FF5722").pack(anchor=tk.W, pady=5)
+                 font=("Arial", 9, "bold"), fg="#FF5722").pack(anchor=tk.W, pady=5)
         
-        tk.Label(threshold_frame, text="Sounds quieter than this are always classified as noise", 
-                font=("Arial", 8), fg="gray").pack(anchor=tk.W, pady=2)
+        tk.Label(threshold_frame, text="Sounds quieter than this are always classified as noise",
+                 font=("Arial", 8), fg="gray").pack(anchor=tk.W, pady=2)
         
         # Auto-calculate threshold button
         auto_frame = tk.Frame(threshold_frame)
         auto_frame.pack(fill=tk.X, pady=5)
         
-        tk.Button(auto_frame, text="Auto-Calculate RMS", command=self.auto_calculate_threshold,
-                 bg="#9C27B0", fg="white", font=("Arial", 8)).pack(side=tk.LEFT, padx=5)
+        tk.Button(auto_frame, text="Auto-Calculate RMS", command=self.auto_calculate_threshold, 
+                  bg="#9C27B0", fg="white", font=("Arial", 8)).pack(side=tk.LEFT, padx=5)
         
         self.auto_threshold_label = tk.Label(auto_frame, text="", font=("Arial", 8), fg="blue")
         self.auto_threshold_label.pack(side=tk.LEFT, padx=5)
@@ -357,14 +351,13 @@ class DataCleanupApp:
         threshold_control = tk.Frame(threshold_frame)
         threshold_control.pack(fill=tk.X, pady=5)
         
-        self.threshold_scale = tk.Scale(threshold_control, from_=0.00001, to=0.1,
-                                       resolution=0.00001, orient=tk.HORIZONTAL,
-                                       command=self.on_threshold_change, length=250)
+        self.threshold_scale = tk.Scale(threshold_control, from_=0.00001, to=0.1, resolution=0.00001, 
+                                         orient=tk.HORIZONTAL, command=self.on_threshold_change, length=250)
         self.threshold_scale.set(self.threshold_value)
         self.threshold_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
-        self.threshold_value_label = tk.Label(threshold_control, text=f"{self.threshold_value:.5f}",
-                                             font=("Arial", 10, "bold"), fg="#FF5722", width=10)
+        self.threshold_value_label = tk.Label(threshold_control, text=f"{self.threshold_value:.5f}", 
+                                               font=("Arial", 10, "bold"), fg="#FF5722", width=10)
         self.threshold_value_label.pack(side=tk.LEFT, padx=5)
         
         # RMS Preset buttons
@@ -380,43 +373,38 @@ class DataCleanupApp:
         ]
         
         for name, value in presets:
-            tk.Button(preset_frame, text=name, 
-                     command=lambda v=value: self.set_threshold(v),
-                     font=("Arial", 8), width=8).pack(side=tk.LEFT, padx=2)
+            tk.Button(preset_frame, text=name, command=lambda v=value: self.set_threshold(v),
+                      font=("Arial", 8), width=8).pack(side=tk.LEFT, padx=2)
         
         # Statistics
-        stats_frame = tk.LabelFrame(parent, text="Statistics", font=("Arial", 10, "bold"), 
-                                   padx=10, pady=10)
+        stats_frame = tk.LabelFrame(parent, text="Statistics", font=("Arial", 10, "bold"), padx=10, pady=10)
         stats_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        self.stats_text = tk.Text(stats_frame, height=7, font=("Courier", 9), 
-                                 bg="#f5f5f5", relief=tk.FLAT)
+        self.stats_text = tk.Text(stats_frame, height=7, font=("Courier", 9), bg="#f5f5f5", relief=tk.FLAT)
         self.stats_text.pack(fill=tk.BOTH, expand=True)
         self.update_stats_display()
         
         # Navigation
-        nav_frame = tk.LabelFrame(parent, text="3. Navigate & Review", 
-                                 font=("Arial", 10, "bold"), padx=10, pady=10)
+        nav_frame = tk.LabelFrame(parent, text="3. Navigate & Review", font=("Arial", 10, "bold"), padx=10, pady=10)
         nav_frame.pack(fill=tk.X, padx=10, pady=5)
         
         # Filter option
         tk.Checkbutton(nav_frame, text="Show only files classified as noise", 
-                      variable=self.show_only_below_threshold,
-                      command=self.apply_filter,
-                      font=("Arial", 9)).pack(anchor=tk.W, pady=5)
+                       variable=self.show_only_below_threshold, command=self.apply_filter,
+                       font=("Arial", 9)).pack(anchor=tk.W, pady=5)
         
         # Quick navigation buttons for noise
         noise_nav_frame = tk.Frame(nav_frame)
         noise_nav_frame.pack(pady=5, fill=tk.X)
         
-        tk.Button(noise_nav_frame, text="◀ Previous Noise", command=self.find_previous_noise_direct,
-                 bg="#FF9800", fg="white", font=("Arial", 9, "bold"), width=15).pack(side=tk.LEFT, padx=2, expand=True)
-        tk.Button(noise_nav_frame, text="Next Noise ▶", command=self.find_next_noise_direct,
-                 bg="#FF9800", fg="white", font=("Arial", 9, "bold"), width=15).pack(side=tk.LEFT, padx=2, expand=True)
+        tk.Button(noise_nav_frame, text="◀ Previous Noise", command=self.find_previous_noise_direct, 
+                  bg="#FF9800", fg="white", font=("Arial", 9, "bold"), width=15).pack(side=tk.LEFT, padx=2, expand=True)
+        
+        tk.Button(noise_nav_frame, text="Next Noise ▶", command=self.find_next_noise_direct, 
+                  bg="#FF9800", fg="white", font=("Arial", 9, "bold"), width=15).pack(side=tk.LEFT, padx=2, expand=True)
         
         # Current file info
-        self.current_file_label = tk.Label(nav_frame, text="No file loaded", 
-                                          font=("Arial", 9, "bold"), fg="#1976D2")
+        self.current_file_label = tk.Label(nav_frame, text="No file loaded", font=("Arial", 9, "bold"), fg="#1976D2")
         self.current_file_label.pack(pady=5)
         
         self.current_stats_label = tk.Label(nav_frame, text="", font=("Arial", 8), fg="black")
@@ -426,14 +414,10 @@ class DataCleanupApp:
         nav_buttons = tk.Frame(nav_frame)
         nav_buttons.pack(pady=10)
         
-        tk.Button(nav_buttons, text="⏮ First", command=self.go_first,
-                 font=("Arial", 10), width=8).grid(row=0, column=0, padx=2, pady=2)
-        tk.Button(nav_buttons, text="◀ Previous", command=self.go_previous,
-                 font=("Arial", 10), width=8).grid(row=0, column=1, padx=2, pady=2)
-        tk.Button(nav_buttons, text="Next ▶", command=self.go_next,
-                 font=("Arial", 10), width=8).grid(row=0, column=2, padx=2, pady=2)
-        tk.Button(nav_buttons, text="Last ⏭", command=self.go_last,
-                 font=("Arial", 10), width=8).grid(row=0, column=3, padx=2, pady=2)
+        tk.Button(nav_buttons, text="⏮ First", command=self.go_first, font=("Arial", 10), width=8).grid(row=0, column=0, padx=2, pady=2)
+        tk.Button(nav_buttons, text="◀ Previous", command=self.go_previous, font=("Arial", 10), width=8).grid(row=0, column=1, padx=2, pady=2)
+        tk.Button(nav_buttons, text="Next ▶", command=self.go_next, font=("Arial", 10), width=8).grid(row=0, column=2, padx=2, pady=2)
+        tk.Button(nav_buttons, text="Last ⏭", command=self.go_last, font=("Arial", 10), width=8).grid(row=0, column=3, padx=2, pady=2)
         
         # Jump to index
         jump_frame = tk.Frame(nav_frame)
@@ -442,91 +426,74 @@ class DataCleanupApp:
         tk.Label(jump_frame, text="Jump to:", font=("Arial", 9)).pack(side=tk.LEFT, padx=5)
         self.jump_entry = tk.Entry(jump_frame, width=8, font=("Arial", 9))
         self.jump_entry.pack(side=tk.LEFT, padx=5)
-        tk.Button(jump_frame, text="Go", command=self.jump_to_index,
-                 font=("Arial", 9)).pack(side=tk.LEFT, padx=5)
+        tk.Button(jump_frame, text="Go", command=self.jump_to_index, font=("Arial", 9)).pack(side=tk.LEFT, padx=5)
         
         # Playback controls
         playback_frame = tk.Frame(nav_frame)
         playback_frame.pack(pady=10)
         
         # Main play button
-        self.play_button = tk.Button(playback_frame, text="▶ Play Audio", 
-                                     command=self.toggle_playback,
-                                     bg="#4CAF50", fg="white", 
-                                     font=("Arial", 11, "bold"), width=14, height=2)
+        self.play_button = tk.Button(playback_frame, text="▶ Play Audio", command=self.toggle_playback, 
+                                      bg="#4CAF50", fg="white", font=("Arial", 11, "bold"), width=14, height=2)
         self.play_button.pack(pady=5)
         
         # Quick play button (plays at current speed without stopping)
-        tk.Button(playback_frame, text="🔊 Play Current Audio", 
-                 command=self.play_audio_quick,
-                 bg="#2196F3", fg="white", 
-                 font=("Arial", 10, "bold"), width=14).pack(pady=2)
+        tk.Button(playback_frame, text="🔊 Play Current Audio", command=self.play_audio_quick, 
+                  bg="#2196F3", fg="white", font=("Arial", 10, "bold"), width=14).pack(pady=2)
         
         # Playback speed control
         speed_frame = tk.Frame(playback_frame)
         speed_frame.pack(pady=5)
-        
         tk.Label(speed_frame, text="Speed:", font=("Arial", 9)).pack(side=tk.LEFT, padx=5)
         
         self.playback_speed = tk.DoubleVar(value=1.0)
+        tk.Button(speed_frame, text="0.5x", command=lambda: self.set_playback_speed(0.5), 
+                  font=("Arial", 8), width=5).pack(side=tk.LEFT, padx=1)
+        tk.Button(speed_frame, text="0.75x", command=lambda: self.set_playback_speed(0.75), 
+                  font=("Arial", 8), width=5).pack(side=tk.LEFT, padx=1)
+        tk.Button(speed_frame, text="1x", command=lambda: self.set_playback_speed(1.0), 
+                  font=("Arial", 8, "bold"), width=5, bg="#E3F2FD").pack(side=tk.LEFT, padx=1)
+        tk.Button(speed_frame, text="1.5x", command=lambda: self.set_playback_speed(1.5), 
+                  font=("Arial", 8), width=5).pack(side=tk.LEFT, padx=1)
+        tk.Button(speed_frame, text="2x", command=lambda: self.set_playback_speed(2.0), 
+                  font=("Arial", 8), width=5).pack(side=tk.LEFT, padx=1)
         
-        tk.Button(speed_frame, text="0.5x", command=lambda: self.set_playback_speed(0.5),
-                 font=("Arial", 8), width=5).pack(side=tk.LEFT, padx=1)
-        tk.Button(speed_frame, text="0.75x", command=lambda: self.set_playback_speed(0.75),
-                 font=("Arial", 8), width=5).pack(side=tk.LEFT, padx=1)
-        tk.Button(speed_frame, text="1x", command=lambda: self.set_playback_speed(1.0),
-                 font=("Arial", 8, "bold"), width=5, bg="#E3F2FD").pack(side=tk.LEFT, padx=1)
-        tk.Button(speed_frame, text="1.5x", command=lambda: self.set_playback_speed(1.5),
-                 font=("Arial", 8), width=5).pack(side=tk.LEFT, padx=1)
-        tk.Button(speed_frame, text="2x", command=lambda: self.set_playback_speed(2.0),
-                 font=("Arial", 8), width=5).pack(side=tk.LEFT, padx=1)
-        
-        self.speed_label = tk.Label(playback_frame, text="Speed: 1.0x", 
-                                    font=("Arial", 9, "bold"), fg="#1976D2")
+        self.speed_label = tk.Label(playback_frame, text="Speed: 1.0x", font=("Arial", 9, "bold"), fg="#1976D2")
         self.speed_label.pack(pady=2)
         
-        tk.Checkbutton(playback_frame, text="Auto-play on navigation", 
-                      variable=self.auto_play,
-                      font=("Arial", 9)).pack(pady=5)
+        tk.Checkbutton(playback_frame, text="Auto-play on navigation", variable=self.auto_play, 
+                       font=("Arial", 9)).pack(pady=5)
         
         # Mark for deletion
-        self.delete_button = tk.Button(nav_frame, text="❌ Mark for Deletion", 
-                                       command=self.toggle_mark_for_deletion,
-                                       bg="#FF5722", fg="white", 
-                                       font=("Arial", 10, "bold"))
+        self.delete_button = tk.Button(nav_frame, text="❌ Mark for Deletion", command=self.toggle_mark_for_deletion, 
+                                        bg="#FF5722", fg="white", font=("Arial", 10, "bold"))
         self.delete_button.pack(pady=10, fill=tk.X)
         
         # Cleanup Actions
-        action_frame = tk.LabelFrame(parent, text="4. Cleanup Actions", 
-                                    font=("Arial", 10, "bold"), padx=10, pady=10)
+        action_frame = tk.LabelFrame(parent, text="4. Cleanup Actions", font=("Arial", 10, "bold"), padx=10, pady=10)
         action_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        tk.Button(action_frame, text="Mark All Detected Noise", 
-                 command=self.mark_all_below_threshold,
-                 bg="#FF9800", fg="white", font=("Arial", 9, "bold")).pack(fill=tk.X, pady=3)
+        tk.Button(action_frame, text="Mark All Detected Noise", command=self.mark_all_below_threshold, 
+                  bg="#FF9800", fg="white", font=("Arial", 9, "bold")).pack(fill=tk.X, pady=3)
         
-        tk.Button(action_frame, text="Unmark All", command=self.unmark_all,
-                 bg="#607D8B", fg="white", font=("Arial", 9, "bold")).pack(fill=tk.X, pady=3)
+        tk.Button(action_frame, text="Unmark All", command=self.unmark_all, 
+                  bg="#607D8B", fg="white", font=("Arial", 9, "bold")).pack(fill=tk.X, pady=3)
         
-        tk.Button(action_frame, text="🗑 DELETE Marked Files", 
-                 command=self.delete_marked_files,
-                 bg="#D32F2F", fg="white", font=("Arial", 10, "bold")).pack(fill=tk.X, pady=10)
+        tk.Button(action_frame, text="🗑 DELETE Marked Files", command=self.delete_marked_files, 
+                  bg="#D32F2F", fg="white", font=("Arial", 10, "bold")).pack(fill=tk.X, pady=10)
         
         # Export
-        tk.Button(action_frame, text="📊 Export Analysis Report", 
-                 command=self.export_report,
-                 bg="#1976D2", fg="white", font=("Arial", 9, "bold")).pack(fill=tk.X, pady=3)
-    
+        tk.Button(action_frame, text="📊 Export Analysis Report", command=self.export_report, 
+                  bg="#1976D2", fg="white", font=("Arial", 9, "bold")).pack(fill=tk.X, pady=3)
+
     def build_right_panel(self, parent):
         # Visualization controls
         viz_control = tk.Frame(parent)
         viz_control.pack(fill=tk.X, padx=10, pady=5)
         
         tk.Label(viz_control, text="Visualization:", font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=5)
-        
-        tk.Checkbutton(viz_control, text="Show Spectrogram", variable=self.show_spectrogram,
-                      command=self.update_visualization,
-                      font=("Arial", 9)).pack(side=tk.LEFT, padx=10)
+        tk.Checkbutton(viz_control, text="Show Spectrogram", variable=self.show_spectrogram, 
+                       command=self.update_visualization, font=("Arial", 9)).pack(side=tk.LEFT, padx=10)
         
         # Matplotlib figure
         self.fig = Figure(figsize=(10, 8), dpi=100)
@@ -548,7 +515,7 @@ class DataCleanupApp:
         
         self.fig.tight_layout()
         self.canvas.draw()
-    
+
     def on_concentration_change(self, value):
         """Handle concentration threshold change"""
         self.concentration_threshold = float(value)
@@ -560,28 +527,30 @@ class DataCleanupApp:
                 audio = cached['audio']
                 sample_rate = cached['sample_rate']
                 rms = cached['rms']
+                
                 is_noise, reason, concentration, details = self.is_likely_noise(audio, sample_rate, rms)
+                
                 cached['is_noise'] = is_noise
                 cached['reason'] = reason
                 cached['concentration'] = concentration
-        
-        # Update stats and visualization
-        self.update_stats_display()
-        if self.current_audio is not None:
-            self.load_current_file()
-    
+            
+            # Update stats and visualization
+            self.update_stats_display()
+            if self.current_audio is not None:
+                self.load_current_file()
+
     def set_concentration_threshold(self, value):
         """Set concentration threshold to a preset value"""
         self.conc_scale.set(value)
         self.on_concentration_change(value)
-    
+
     def update_detection_method(self):
         """Update when detection method changes"""
         # Reanalyze if files are loaded
         if self.audio_files:
             self.analyze_all_files()
             self.load_current_file()
-    
+
     def load_sessions(self):
         """Load all available recording sessions"""
         self.session_listbox.delete(0, tk.END)
@@ -604,25 +573,22 @@ class DataCleanupApp:
                 
                 if has_audio:
                     self.sessions.append(item_path)
-                    
                     # Count files
-                    file_count = sum(1 for r, d, f in os.walk(item_path) 
-                                   for file in f if file.endswith('.wav'))
-                    
+                    file_count = sum(1 for r, d, f in os.walk(item_path) for file in f if file.endswith('.wav'))
                     self.session_listbox.insert(tk.END, f"{item} ({file_count} files)")
         
         if not self.sessions:
             self.session_info_label.config(text="No sessions found", fg="orange")
         else:
             self.session_info_label.config(text=f"{len(self.sessions)} session(s) found", fg="green")
-    
+
     def browse_folder(self):
         """Browse for custom recordings folder"""
         folder = filedialog.askdirectory(title="Select Recordings Folder")
         if folder:
             self.base_dir = folder
             self.load_sessions()
-    
+
     def on_session_select(self, event):
         """Handle session selection"""
         selection = self.session_listbox.curselection()
@@ -634,7 +600,7 @@ class DataCleanupApp:
         
         # Load all audio files from this session
         self.load_audio_files()
-    
+
     def load_audio_files(self):
         """Load all audio files from current session"""
         if not self.current_session:
@@ -673,7 +639,7 @@ class DataCleanupApp:
         # Load first file
         if self.audio_files:
             self.load_current_file()
-    
+
     def load_metadata(self):
         """Load metadata.csv if available"""
         metadata_path = os.path.join(self.current_session, "metadata.csv")
@@ -691,7 +657,7 @@ class DataCleanupApp:
                             self.current_metadata[full_path] = row
             except Exception as e:
                 print(f"Error loading metadata: {e}")
-    
+
     def analyze_all_files(self):
         """Analyze all audio files and cache results"""
         if not self.audio_files:
@@ -734,7 +700,7 @@ class DataCleanupApp:
         
         print("Analysis complete!")
         self.update_stats_display()
-    
+
     def load_current_file(self):
         """Load and display current audio file"""
         if not self.audio_files or self.current_index >= len(self.audio_files):
@@ -767,6 +733,7 @@ class DataCleanupApp:
                 # Calculate metrics
                 rms = np.sqrt(np.mean(self.current_audio**2))
                 peak = np.max(np.abs(self.current_audio))
+                
                 is_noise, reason, concentration, details = self.is_likely_noise(self.current_audio, self.sample_rate, rms)
                 
                 # Cache it
@@ -817,8 +784,7 @@ class DataCleanupApp:
                          f"{metadata_str}\n"
                          f"{marked}")
             
-            self.current_stats_label.config(text=stats_text, 
-                                           fg=status_color if not marked else "#D32F2F")
+            self.current_stats_label.config(text=stats_text, fg=status_color if not marked else "#D32F2F")
             
             # Update delete button
             if file_path in self.files_to_delete:
@@ -832,10 +798,10 @@ class DataCleanupApp:
             # Auto-play if enabled
             if self.auto_play.get() and not self.is_playing:
                 self.play_audio()
-            
+                
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load audio file: {e}")
-    
+
     def update_visualization(self):
         """Update waveform and energy visualization"""
         if self.current_audio is None:
@@ -881,6 +847,7 @@ class DataCleanupApp:
         
         energy = []
         energy_time = []
+        
         for i in range(0, len(self.current_audio) - window_size, hop_size):
             window = self.current_audio[i:i+window_size]
             rms_window = np.sqrt(np.mean(window**2))
@@ -890,24 +857,24 @@ class DataCleanupApp:
         if energy:
             self.ax_spec.plot(energy_time, energy, linewidth=2, color='#FF5722', label='Energy')
             self.ax_spec.axhline(y=self.threshold_value, color='red', linestyle='--', 
-                                label=f'RMS Threshold: {self.threshold_value:.5f}', alpha=0.7)
+                                 label=f'RMS Threshold: {self.threshold_value:.5f}', alpha=0.7)
             
             # Mark peak energy region
             if len(energy) > 0:
                 peak_idx = np.argmax(energy)
                 self.ax_spec.scatter(energy_time[peak_idx], energy[peak_idx], 
-                                   c='green', s=100, zorder=5, label='Peak Energy')
-        
-        self.ax_spec.set_title(f"Energy Concentration Over Time (RMS: {rms:.6f})", 
-                              fontsize=11, fontweight='bold')
-        self.ax_spec.set_xlabel("Time (s)")
-        self.ax_spec.set_ylabel("Energy (RMS)")
-        self.ax_spec.grid(True, alpha=0.3)
-        self.ax_spec.legend(loc='upper right', fontsize=8)
+                                     c='green', s=100, zorder=5, label='Peak Energy')
+            
+            self.ax_spec.set_title(f"Energy Concentration Over Time (RMS: {rms:.6f})", 
+                                   fontsize=11, fontweight='bold')
+            self.ax_spec.set_xlabel("Time (s)")
+            self.ax_spec.set_ylabel("Energy (RMS)")
+            self.ax_spec.grid(True, alpha=0.3)
+            self.ax_spec.legend(loc='upper right', fontsize=8)
         
         self.fig.tight_layout()
         self.canvas.draw()
-    
+
     def on_threshold_change(self, value):
         """Handle threshold slider change"""
         self.threshold_value = float(value)
@@ -919,24 +886,26 @@ class DataCleanupApp:
                 audio = cached['audio']
                 sample_rate = cached['sample_rate']
                 rms = cached['rms']
+                
                 is_noise, reason, concentration, details = self.is_likely_noise(audio, sample_rate, rms)
+                
                 cached['is_noise'] = is_noise
                 cached['reason'] = reason
                 cached['concentration'] = concentration
                 cached['details'] = details
-        
-        # Update stats
-        self.update_stats_display()
-        
-        # Update visualization if file is loaded
-        if self.current_audio is not None:
-            self.load_current_file()
-    
+            
+            # Update stats
+            self.update_stats_display()
+            
+            # Update visualization if file is loaded
+            if self.current_audio is not None:
+                self.load_current_file()
+
     def set_threshold(self, value):
         """Set threshold to a preset value"""
         self.threshold_scale.set(value)
         self.on_threshold_change(value)
-    
+
     def auto_calculate_threshold(self):
         """Automatically calculate optimal threshold based on data distribution"""
         if not self.analysis_cache:
@@ -970,7 +939,7 @@ class DataCleanupApp:
         
         if messagebox.askyesno("Auto-Calculate Threshold", msg):
             self.set_threshold(suggested)
-    
+
     def update_stats_display(self):
         """Update statistics display"""
         total = len(self.audio_files)
@@ -997,13 +966,13 @@ class DataCleanupApp:
         noise_pct = (noise / total * 100) if total > 0 else 0
         marked_pct = (marked / total * 100) if total > 0 else 0
         
-        stats_text = f"""Total Files:      {total}
-Valid Keystrokes: {valid} ({valid_pct:.1f}%)
-Noise Detected:   {noise} ({noise_pct:.1f}%)
-Marked for Del:   {marked} ({marked_pct:.1f}%)
+        stats_text = f"""Total Files:       {total}
+Valid Keystrokes:  {valid} ({valid_pct:.1f}%)
+Noise Detected:    {noise} ({noise_pct:.1f}%)
+Marked for Del:    {marked} ({marked_pct:.1f}%)
 
-RMS Threshold:    {self.threshold_value:.5f}
-Conc. Threshold:  {self.concentration_threshold:.2f}
+RMS Threshold:     {self.threshold_value:.5f}
+Conc. Threshold:   {self.concentration_threshold:.2f}
 """
         
         self.stats_text.delete(1.0, tk.END)
@@ -1017,25 +986,25 @@ Conc. Threshold:  {self.concentration_threshold:.2f}
             'marked_for_deletion': marked,
             'noise_detected': noise
         }
-    
+
     def apply_filter(self):
         """Apply filter to show only files below threshold"""
         # This would require maintaining a filtered list
         # For now, just notify
         if self.show_only_below_threshold.get():
             messagebox.showinfo("Info", "Use navigation buttons to browse. Noise files will be highlighted.")
-    
+
     # Navigation methods
     def go_first(self):
         """Go to first file"""
         self.current_index = 0
         self.load_current_file()
-    
+
     def go_last(self):
         """Go to last file"""
         self.current_index = len(self.audio_files) - 1
         self.load_current_file()
-    
+
     def go_previous(self):
         """Go to previous file"""
         if self.show_only_below_threshold.get():
@@ -1046,7 +1015,7 @@ Conc. Threshold:  {self.concentration_threshold:.2f}
             if self.current_index > 0:
                 self.current_index -= 1
                 self.load_current_file()
-    
+
     def go_next(self):
         """Go to next file"""
         if self.show_only_below_threshold.get():
@@ -1057,7 +1026,7 @@ Conc. Threshold:  {self.concentration_threshold:.2f}
             if self.current_index < len(self.audio_files) - 1:
                 self.current_index += 1
                 self.load_current_file()
-    
+
     def find_next_below_threshold(self):
         """Find next file classified as noise"""
         start = self.current_index + 1
@@ -1070,7 +1039,7 @@ Conc. Threshold:  {self.concentration_threshold:.2f}
                     return
         
         messagebox.showinfo("Info", "No more noise files")
-    
+
     def find_previous_below_threshold(self):
         """Find previous file classified as noise"""
         start = self.current_index - 1
@@ -1083,15 +1052,15 @@ Conc. Threshold:  {self.concentration_threshold:.2f}
                     return
         
         messagebox.showinfo("Info", "No more noise files")
-    
+
     def find_previous_noise_direct(self):
         """Find and jump to previous noise file"""
         self.find_previous_below_threshold()
-    
+
     def find_next_noise_direct(self):
         """Find and jump to next noise file"""
         self.find_next_below_threshold()
-    
+
     def set_playback_speed(self, speed):
         """Set playback speed"""
         self.playback_speed.set(speed)
@@ -1101,7 +1070,7 @@ Conc. Threshold:  {self.concentration_threshold:.2f}
         if self.is_playing:
             self.stop_playback()
             self.root.after(100, self.play_audio)
-    
+
     def jump_to_index(self):
         """Jump to specific index"""
         try:
@@ -1113,25 +1082,29 @@ Conc. Threshold:  {self.concentration_threshold:.2f}
                 messagebox.showerror("Error", f"Index must be between 1 and {len(self.audio_files)}")
         except ValueError:
             messagebox.showerror("Error", "Please enter a valid number")
-    
+
     def toggle_playback(self):
         """Toggle audio playback"""
         if self.is_playing:
             self.stop_playback()
         else:
             self.play_audio()
-    
+
     def play_audio(self):
         """Play current audio file"""
         if self.current_audio is None:
             return
         
+        # Stop any existing playback first
+        self.stop_playback()
+        
         self.is_playing = True
         self.play_button.config(text="⏸ Stop", bg="#FF5722")
         
+        # Start playback in separate thread
         self.play_thread = threading.Thread(target=self._play_audio_thread, daemon=True)
         self.play_thread.start()
-    
+
     def play_audio_quick(self):
         """Quick play - just play the audio at current speed"""
         if self.current_audio is None:
@@ -1144,9 +1117,9 @@ Conc. Threshold:  {self.concentration_threshold:.2f}
             self.root.after(100, self.play_audio)
         else:
             self.play_audio()
-    
+
     def _play_audio_thread(self):
-        """Audio playback thread with speed control"""
+        """Audio playback thread with speed control - FIXED"""
         try:
             # Get playback speed
             speed = self.playback_speed.get()
@@ -1154,19 +1127,29 @@ Conc. Threshold:  {self.concentration_threshold:.2f}
             # Adjust sample rate for speed (higher rate = faster playback)
             adjusted_rate = int(self.sample_rate * speed)
             
+            # Play the audio and wait for it to finish
             sd.play(self.current_audio, adjusted_rate)
-            sd.wait()
+            sd.wait()  # This blocks until playback is complete
+            
         except Exception as e:
             print(f"Playback error: {e}")
         finally:
-            self.root.after(0, self.stop_playback)
-    
+            # Schedule UI update on main thread
+            if self.is_playing:  # Only update if we haven't been stopped externally
+                self.root.after(0, self._playback_finished)
+
+    def _playback_finished(self):
+        """Called when playback naturally finishes"""
+        self.is_playing = False
+        self.play_button.config(text="▶ Play Audio", bg="#4CAF50")
+
     def stop_playback(self):
         """Stop audio playback"""
-        self.is_playing = False
-        sd.stop()
-        self.play_button.config(text="▶ Play Audio", bg="#4CAF50")
-    
+        if self.is_playing:
+            self.is_playing = False
+            sd.stop()
+            self.play_button.config(text="▶ Play Audio", bg="#4CAF50")
+
     def toggle_mark_for_deletion(self):
         """Mark/unmark current file for deletion"""
         if not self.audio_files:
@@ -1182,7 +1165,7 @@ Conc. Threshold:  {self.concentration_threshold:.2f}
         # Update display
         self.update_stats_display()
         self.load_current_file()
-    
+
     def mark_all_below_threshold(self):
         """Mark all files classified as noise for deletion"""
         if not self.audio_files:
@@ -1196,17 +1179,15 @@ Conc. Threshold:  {self.concentration_threshold:.2f}
         
         self.update_stats_display()
         self.load_current_file()
-        
         messagebox.showinfo("Marked", f"Marked {count} noise files for deletion")
-    
+
     def unmark_all(self):
         """Unmark all files"""
         self.files_to_delete.clear()
         self.update_stats_display()
         self.load_current_file()
-        
         messagebox.showinfo("Unmarked", "All files unmarked")
-    
+
     def delete_marked_files(self):
         """Delete all marked files"""
         if not self.files_to_delete:
@@ -1214,7 +1195,6 @@ Conc. Threshold:  {self.concentration_threshold:.2f}
             return
         
         count = len(self.files_to_delete)
-        
         msg = (f"You are about to DELETE {count} files permanently!\n\n"
                f"This action CANNOT be undone.\n\n"
                f"Do you want to continue?")
@@ -1224,7 +1204,7 @@ Conc. Threshold:  {self.concentration_threshold:.2f}
         
         # Create backup folder
         backup_folder = os.path.join(self.current_session, "_deleted_backup_" + 
-                                    datetime.now().strftime("%Y%m%d_%H%M%S"))
+                                      datetime.now().strftime("%Y%m%d_%H%M%S"))
         os.makedirs(backup_folder, exist_ok=True)
         
         deleted_count = 0
@@ -1236,10 +1216,8 @@ Conc. Threshold:  {self.concentration_threshold:.2f}
                 relative_path = os.path.relpath(file_path, self.current_session)
                 backup_path = os.path.join(backup_folder, relative_path)
                 os.makedirs(os.path.dirname(backup_path), exist_ok=True)
-                
                 shutil.move(file_path, backup_path)
                 deleted_count += 1
-                
             except Exception as e:
                 print(f"Error deleting {file_path}: {e}")
                 failed.append(file_path)
@@ -1251,12 +1229,11 @@ Conc. Threshold:  {self.concentration_threshold:.2f}
         self.load_audio_files()
         
         result_msg = f"Moved {deleted_count} files to backup folder:\n{backup_folder}\n\n"
-        
         if failed:
             result_msg += f"Failed to delete {len(failed)} files."
         
         messagebox.showinfo("Deletion Complete", result_msg)
-    
+
     def update_metadata_after_deletion(self):
         """Update metadata.csv after deletion"""
         metadata_path = os.path.join(self.current_session, "metadata.csv")
@@ -1270,11 +1247,9 @@ Conc. Threshold:  {self.concentration_threshold:.2f}
             with open(metadata_path, 'r', newline='') as f:
                 reader = csv.DictReader(f)
                 fieldnames = reader.fieldnames
-                
                 for row in reader:
                     wav_file = row.get('wav_file', '')
                     full_path = os.path.join(self.current_session, wav_file)
-                    
                     # Only keep if file still exists
                     if os.path.exists(full_path):
                         rows.append(row)
@@ -1287,7 +1262,7 @@ Conc. Threshold:  {self.concentration_threshold:.2f}
                 
         except Exception as e:
             print(f"Error updating metadata: {e}")
-    
+
     def export_report(self):
         """Export analysis report"""
         if not self.audio_files:
@@ -1306,8 +1281,7 @@ Conc. Threshold:  {self.concentration_threshold:.2f}
         
         try:
             with open(filename, 'w', newline='') as f:
-                fieldnames = ['file_path', 'rms', 'peak', 'concentration', 'classification', 
-                             'reason', 'marked_for_deletion']
+                fieldnames = ['file_path', 'rms', 'peak', 'concentration', 'classification', 'reason', 'marked_for_deletion']
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
                 
