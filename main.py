@@ -27,15 +27,16 @@ class ResearchApp:
         self.timer_running = False
         self.duration_var = tk.StringVar(value="60")
         
-        # Audio parameters
+        # Audio parameters - MATCHED TO ORIGINAL DATASET
         self.fs = 44100  # Sample rate
         self.buffer_duration = 2.0  # seconds
-        self.segment_duration = 0.33  # seconds per key (matching dataset format)
+        self.segment_duration = 0.430  # Updated: 18963 samples / 44100 Hz = 0.43 seconds
+        self.target_segment_samples = 18963  # EXACT length from original dataset
         self.buffer_samples = int(self.fs * self.buffer_duration)
-        self.segment_samples = int(self.fs * self.segment_duration)
+        self.segment_samples = self.target_segment_samples
         
-        # Initialize buffer properly
-        self.audio_buffer = np.zeros(self.buffer_samples, dtype=np.float32)
+        # Initialize buffer properly - STEREO
+        self.audio_buffer = np.zeros((self.buffer_samples, 2), dtype=np.float32)
         self.buffer_lock = threading.Lock()
         
         # NOISE PROFILE for spectral subtraction
@@ -71,7 +72,7 @@ class ResearchApp:
         self.output_dir = None
         self.metadata_file = None
         self.metadata_fields = ["timestamp", "key", "wav_file", "rms_level", "peak_level", "quality", 
-                               "mic_id", "keyboard_id", "session_id", "file_number"]
+                               "mic_id", "keyboard_id", "session_id", "file_number", "channels", "samples"]
         
         # Configuration file for storing IDs
         self.config_file = "recording_config.json"
@@ -153,6 +154,16 @@ class ResearchApp:
         title_label = tk.Label(main_frame, text="Keyboard Acoustic Recorder", 
                               font=("Arial", 16, "bold"))
         title_label.pack(pady=(0, 10))
+        
+        # DATASET FORMAT INFO
+        format_frame = tk.LabelFrame(main_frame, text="Dataset Format (Auto-configured)", 
+                                    font=("Arial", 9, "bold"), padx=10, pady=5, bg="#E3F2FD")
+        format_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        format_text = f"✓ Stereo (2 channels) - mono mics auto-converted\n✓ 44.1 kHz sample rate\n✓ {self.target_segment_samples} samples per key (~{self.segment_duration:.3f}s)\n✓ Produces 64 time frames for model"
+        format_label = tk.Label(format_frame, text=format_text, 
+                            font=("Arial", 8), fg="#1565C0", justify=tk.LEFT, bg="#E3F2FD")
+        format_label.pack(pady=2)
         
         # Microphone and Keyboard ID Section
         id_frame = tk.LabelFrame(main_frame, text="Session Configuration", 
@@ -318,13 +329,13 @@ class ResearchApp:
         self.stop_button.pack(side=tk.LEFT, padx=5)
         
         # Info Label
-        info_text = "Instructions:\n1. Set Microphone ID and Keyboard ID\n2. Select audio device\n3. Calibrate background noise (stay quiet for 2 seconds)\n4. Test microphone\n5. Start recording and type 0-9, a-z!\n\nTip: Files will be organized in folders (0-9, a-z) with sequential numbering (0.wav, 1.wav, ...)"
+        info_text = "Instructions:\n1. Set Microphone ID and Keyboard ID\n2. Select audio device (mono mics will be auto-converted to stereo)\n3. Calibrate background noise (stay quiet for 2 seconds)\n4. Test microphone\n5. Start recording and type 0-9, a-z!\n\nFormat: Stereo, 44.1kHz, 20948 samples (matches dataset requirement)\nFiles organized in folders (0-9, a-z) with sequential numbering"
         info_label = tk.Label(main_frame, text=info_text, 
                             font=("Arial", 9), fg="gray", justify=tk.LEFT)
         info_label.pack(pady=(10, 0))
         
         # Set minimum window size
-        self.root.minsize(700, 750)
+        self.root.minsize(700, 800)
         
         # Initialize stats
         self.keys_recorded = 0
@@ -360,20 +371,27 @@ class ResearchApp:
         threading.Thread(target=self.run_noise_calibration, daemon=True).start()
 
     def run_noise_calibration(self):
-        """Record background noise and create noise profile"""
+        """Record background noise and create noise profile - HANDLES MONO AND STEREO"""
         try:
             duration = 2.0  # seconds
             samples = int(self.fs * duration)
             
+            # Detect device channels
+            device_info = sd.query_devices(self.input_device, 'input')
+            record_channels = min(2, device_info['max_input_channels'])
+            
             # Record background noise
-            noise_data = sd.rec(samples, samplerate=self.fs, channels=1, 
+            noise_data = sd.rec(samples, samplerate=self.fs, channels=record_channels, 
                                dtype='float32', device=self.input_device)
             sd.wait()
             
-            noise_signal = noise_data[:, 0]
+            # Average channels if stereo, or use mono directly
+            if noise_data.shape[1] > 1:
+                noise_signal = np.mean(noise_data, axis=1)
+            else:
+                noise_signal = noise_data[:, 0]
             
             # Compute noise profile (power spectrum)
-            # Use STFT to get frequency-domain representation
             f, t, Zxx = signal.stft(noise_signal, fs=self.fs, nperseg=512)
             noise_power = np.mean(np.abs(Zxx)**2, axis=1)
             
@@ -383,7 +401,7 @@ class ResearchApp:
             # Update UI
             self.root.after(0, self.on_calibration_complete)
             
-            print("Noise calibration complete")
+            print(f"Noise calibration complete ({record_channels} channel{'s' if record_channels > 1 else ''})")
             print(f"Noise profile shape: {noise_power.shape}")
             print(f"Mean noise power: {np.mean(noise_power):.6f}")
             
@@ -405,13 +423,12 @@ class ResearchApp:
         self.noise_status_label.config(text="Calibration failed", fg="red")
 
     def apply_noise_reduction(self, audio_segment):
-        """Apply spectral subtraction noise reduction"""
+        """Apply spectral subtraction noise reduction - works with mono or stereo"""
         if not self.enable_noise_reduction:
             return audio_segment
         
         with self.noise_profile_lock:
             if self.noise_profile is None:
-                # No calibration - apply simple high-pass filter only
                 return self.apply_highpass_filter(audio_segment)
         
         try:
@@ -426,48 +443,41 @@ class ResearchApp:
             with self.noise_profile_lock:
                 noise_magnitude = np.sqrt(self.noise_profile)
             
-            # Ensure noise profile matches the frequency bins
+            # Ensure noise profile matches
             if len(noise_magnitude) != magnitude.shape[0]:
-                # Resize noise profile to match
                 from scipy.interpolate import interp1d
                 old_freqs = np.linspace(0, 1, len(noise_magnitude))
                 new_freqs = np.linspace(0, 1, magnitude.shape[0])
                 f_interp = interp1d(old_freqs, noise_magnitude, kind='linear', fill_value='extrapolate')
                 noise_magnitude = f_interp(new_freqs)
             
-            # Subtract noise (with floor to prevent negative values)
             noise_magnitude = noise_magnitude.reshape(-1, 1)
             reduced_magnitude = np.maximum(
                 magnitude - self.noise_reduction_strength * noise_magnitude, 
-                magnitude * 0.1  # Keep at least 10% of original to preserve signal
+                magnitude * 0.1
             )
             
-            # Reconstruct complex spectrum
+            # Reconstruct
             Zxx_reduced = reduced_magnitude * np.exp(1j * phase)
-            
-            # Inverse STFT
             _, audio_reduced = signal.istft(Zxx_reduced, fs=self.fs, nperseg=512)
             
-            # Ensure output length matches input
+            # Match length
             if len(audio_reduced) > len(audio_segment):
                 audio_reduced = audio_reduced[:len(audio_segment)]
             elif len(audio_reduced) < len(audio_segment):
                 audio_reduced = np.pad(audio_reduced, (0, len(audio_segment) - len(audio_reduced)))
             
-            # Apply additional high-pass filter to remove low-frequency rumble
             audio_reduced = self.apply_highpass_filter(audio_reduced)
             
             return audio_reduced.astype(np.float32)
             
         except Exception as e:
             print(f"Error in noise reduction: {e}")
-            # Fallback to simple filtering
             return self.apply_highpass_filter(audio_segment)
 
     def apply_highpass_filter(self, audio_segment):
         """Apply high-pass filter to remove low-frequency noise"""
         try:
-            # Design Butterworth high-pass filter (cutoff at 80 Hz)
             nyquist = self.fs / 2
             cutoff = 80  # Hz
             order = 4
@@ -485,7 +495,6 @@ class ResearchApp:
         new_mic_id = self.mic_id_entry.get().strip()
         new_keyboard_id = self.keyboard_id_entry.get().strip()
         
-        # Validate IDs (only alphanumeric, underscore, hyphen)
         import re
         if not re.match(r'^[a-zA-Z0-9_-]+$', new_mic_id):
             messagebox.showerror("Invalid ID", "Microphone ID can only contain letters, numbers, underscore, and hyphen.")
@@ -495,15 +504,10 @@ class ResearchApp:
             messagebox.showerror("Invalid ID", "Keyboard ID can only contain letters, numbers, underscore, and hyphen.")
             return
         
-        # Check if IDs changed
         if new_mic_id != self.mic_id or new_keyboard_id != self.keyboard_id:
             self.mic_id = new_mic_id
             self.keyboard_id = new_keyboard_id
-            
-            # Save config
             self.save_config()
-            
-            # Update output directory
             self.update_output_directory()
             
             messagebox.showinfo("Session Updated", 
@@ -540,7 +544,7 @@ class ResearchApp:
             self.custom_entry.insert(0, value)
 
     def load_audio_devices(self):
-        """Load and display available audio input and output devices"""
+        """Load and display available audio input and output devices - ACCEPTS BOTH MONO AND STEREO"""
         try:
             devices = sd.query_devices()
             self.input_device_list = []
@@ -549,10 +553,12 @@ class ResearchApp:
             output_device_names = []
             
             for i, device in enumerate(devices):
-                # Input devices
+                # Input devices - ACCEPT BOTH MONO AND STEREO
                 if device['max_input_channels'] > 0:
                     self.input_device_list.append(i)
-                    device_name = f"{i}: {device['name']} (In: {device['max_input_channels']})"
+                    channels = device['max_input_channels']
+                    ch_type = "Stereo" if channels >= 2 else "Mono (→stereo)"
+                    device_name = f"{i}: {device['name']} ({ch_type}, {channels} ch)"
                     input_device_names.append(device_name)
                 
                 # Output devices
@@ -561,7 +567,6 @@ class ResearchApp:
                     device_name = f"{i}: {device['name']} (Out: {device['max_output_channels']})"
                     output_device_names.append(device_name)
             
-            # Set input devices
             if not self.input_device_list:
                 messagebox.showerror("Error", "No audio input devices found!")
                 self.status_label.config(text="Status: No input devices available", fg="red")
@@ -572,14 +577,12 @@ class ResearchApp:
                 self.input_device_combo.current(0)
                 self.input_device = self.input_device_list[0]
             
-            # Set output devices
             if not self.output_device_list:
                 messagebox.showwarning("Warning", "No audio output devices found! Live playback won't work.")
                 self.output_device = None
             else:
                 self.output_device_combo['values'] = output_device_names
                 if output_device_names:
-                    # Try to find default output device
                     default_output = sd.default.device[1]
                     if default_output in self.output_device_list:
                         default_idx = self.output_device_list.index(default_output)
@@ -643,7 +646,7 @@ class ResearchApp:
             self.start_mic_test()
 
     def start_mic_test(self):
-        """Start microphone test with live audio playback"""
+        """Start microphone test with live audio playback - HANDLES MONO AND STEREO"""
         if self.input_device is None:
             messagebox.showerror("Error", "Please select an audio input device first!")
             return
@@ -668,7 +671,7 @@ class ResearchApp:
         self.status_label.config(text="Status: Mic test stopped", fg="green")
 
     def run_mic_test(self):
-        """Run microphone test with live playback and level monitoring"""
+        """Run microphone test with live playback - HANDLES MONO AND STEREO"""
         def callback(indata, outdata, frames, time_info, status):
             if status:
                 print(f"Status: {status}")
@@ -677,35 +680,45 @@ class ResearchApp:
                 outdata[:] = np.zeros_like(outdata)
                 return
             
-            # Apply noise reduction if enabled and calibrated
-            audio_in = indata[:, 0].copy()
-            if self.enable_noise_reduction and self.noise_profile is not None:
-                audio_filtered = self.apply_noise_reduction(audio_in)
-                outdata[:] = audio_filtered.reshape(-1, 1)
+            # Convert mono to stereo if needed
+            if indata.shape[1] == 1:
+                audio_stereo = np.repeat(indata, 2, axis=1)
             else:
-                # Just apply high-pass filter
-                audio_filtered = self.apply_highpass_filter(audio_in)
-                outdata[:] = audio_filtered.reshape(-1, 1)
+                audio_stereo = indata.copy()
             
-            # Calculate audio level for display
-            level = np.sqrt(np.mean(audio_filtered**2)) * 100  # RMS level
+            # Apply noise reduction if enabled - per channel
+            if self.enable_noise_reduction and self.noise_profile is not None:
+                audio_L = self.apply_noise_reduction(audio_stereo[:, 0].copy())
+                audio_R = self.apply_noise_reduction(audio_stereo[:, 1].copy())
+                outdata[:, 0] = audio_L
+                outdata[:, 1] = audio_R
+            else:
+                audio_L = self.apply_highpass_filter(audio_stereo[:, 0].copy())
+                audio_R = self.apply_highpass_filter(audio_stereo[:, 1].copy())
+                outdata[:, 0] = audio_L
+                outdata[:, 1] = audio_R
+            
+            # Calculate audio level
+            level = np.sqrt(np.mean(outdata**2)) * 100
             self.audio_queue.put(level)
         
         try:
-            # Open duplex stream with selected devices
+            # Detect input channels
+            device_info = sd.query_devices(self.input_device, 'input')
+            input_channels = min(2, device_info['max_input_channels'])
+            
             with sd.Stream(device=(self.input_device, self.output_device),
-                          channels=1, 
+                          channels=(input_channels, 2),  # Input: mono or stereo, Output: stereo
                           samplerate=self.fs,
                           dtype='float32',
                           blocksize=2048,
                           callback=callback):
                 
-                print(f"Mic test started: Input={self.input_device}, Output={self.output_device}")
+                print(f"Mic test started: Input={self.input_device} ({input_channels}ch), Output={self.output_device}")
                 
                 while self.is_testing_mic:
                     try:
                         level = self.audio_queue.get_nowait()
-                        # Update level bar (scale to 0-100)
                         display_level = min(level * 20, 100)
                         self.root.after(0, self.update_level_display, display_level)
                     except queue.Empty:
@@ -723,7 +736,7 @@ class ResearchApp:
         self.level_label.config(text=f"Level: {int(level)}%")
 
     def start_recording(self):
-        """Start recording keystrokes and audio"""
+        """Start recording keystrokes and audio - HANDLES MONO AND STEREO"""
         if self.input_device is None:
             messagebox.showerror("Error", "Please select an audio input device first!")
             return
@@ -745,7 +758,6 @@ class ResearchApp:
             messagebox.showerror("Error", "Please enter a valid recording duration in seconds.")
             return
         
-        # Generate unique session ID for this recording session
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         self.remaining_time = self.recording_duration
@@ -755,21 +767,21 @@ class ResearchApp:
         self.timer_running = True
         self.keys_recorded = 0
         self.keys_rejected = 0
-        self.pressed_keys.clear()  # Clear key debounce tracking
+        self.pressed_keys.clear()
         self.stats_label.config(text="Keys recorded: 0 | Rejected (noise): 0")
         self.root.after(1000, self.countdown_timer)
         
         nr_status = "ON" if self.enable_noise_reduction else "OFF"
-        self.status_label.config(text=f"Status: Recording (Noise Reduction: {nr_status})... Type on your keyboard!", fg="red")
+        self.status_label.config(text=f"Status: Recording (NR: {nr_status})... Type!", fg="red")
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
         self.test_button.config(state=tk.DISABLED)
         self.update_ids_btn.config(state=tk.DISABLED)
         self.calibrate_button.config(state=tk.DISABLED)
         
-        # Reset audio buffer properly
+        # Reset audio buffer - STEREO
         with self.buffer_lock:
-            self.audio_buffer = np.zeros(self.buffer_samples, dtype=np.float32)
+            self.audio_buffer = np.zeros((self.buffer_samples, 2), dtype=np.float32)
         
         self.audio_thread = threading.Thread(target=self.record_audio, daemon=True)
         self.audio_thread.start()
@@ -777,14 +789,19 @@ class ResearchApp:
         self.keyboard_thread = threading.Thread(target=self.listen_keyboard, daemon=True)
         self.keyboard_thread.start()
         
+        # Detect actual recording format
+        device_info = sd.query_devices(self.input_device, 'input')
+        record_channels = min(2, device_info['max_input_channels'])
+        
         print(f"\n{'='*60}")
         print(f"RECORDING SESSION STARTED")
         print(f"Session ID: {self.session_id}")
+        print(f"Input: {record_channels} channel{'s' if record_channels > 1 else ''} → Output: Stereo (2 channels)")
+        print(f"Format: 2 channels, 44100 Hz, {self.target_segment_samples} samples")
         print(f"Microphone: {self.mic_id}")
         print(f"Keyboard: {self.keyboard_id}")
         print(f"Output folder: {self.output_dir}")
         print(f"Noise Reduction: {nr_status} (Strength: {self.noise_reduction_strength})")
-        print(f"Noise Profile: {'Calibrated' if self.noise_profile is not None else 'Not calibrated'}")
         print(f"{'='*60}\n")
 
     def stop_recording(self):
@@ -807,7 +824,6 @@ class ResearchApp:
         
         print(f"\n{'='*60}")
         print(f"RECORDING SESSION ENDED")
-        print(f"Session ID: {self.session_id}")
         print(f"Total keys recorded: {self.keys_recorded}")
         print(f"Total keys rejected: {self.keys_rejected}")
         print(f"{'='*60}\n")
@@ -833,7 +849,7 @@ class ResearchApp:
             self.timer_label.config(text="")
 
     def record_audio(self):
-        """Continuously record audio into a rolling buffer"""
+        """Continuously record audio into a rolling buffer - HANDLES MONO AND STEREO"""
         def callback(indata, frames, time_info, status):
             if status:
                 print(f"Audio callback status: {status}")
@@ -841,29 +857,42 @@ class ResearchApp:
             if not self.is_recording:
                 return
             
-            # Proper buffer update with correct data handling
             with self.buffer_lock:
-                # Extract float32 audio data correctly
-                audio_chunk = indata[:, 0].astype(np.float32).copy()
+                # Extract audio data and convert to stereo if needed
+                audio_chunk = indata.astype(np.float32).copy()
                 
-                # Apply noise reduction to incoming audio
+                # Convert mono to stereo if necessary
+                if audio_chunk.shape[1] == 1:
+                    audio_chunk = np.repeat(audio_chunk, 2, axis=1)
+                
+                # Apply noise reduction per channel if enabled
                 if self.enable_noise_reduction:
-                    audio_chunk = self.apply_noise_reduction(audio_chunk)
+                    audio_chunk[:, 0] = self.apply_noise_reduction(audio_chunk[:, 0])
+                    audio_chunk[:, 1] = self.apply_noise_reduction(audio_chunk[:, 1])
                 
-                # Rolling buffer: shift left and append new frames
-                self.audio_buffer = np.roll(self.audio_buffer, -frames)
-                self.audio_buffer[-frames:] = audio_chunk
+                # Rolling buffer
+                self.audio_buffer = np.roll(self.audio_buffer, -frames, axis=0)
+                self.audio_buffer[-frames:, :] = audio_chunk
         
         try:
-            # Specify dtype explicitly and use proper blocksize
+            # Detect number of channels the device supports
+            device_info = sd.query_devices(self.input_device, 'input')
+            max_channels = device_info['max_input_channels']
+            
+            # Use 2 channels if available, otherwise 1 (will convert to stereo in callback)
+            record_channels = min(2, max_channels)
+            
+            print(f"Recording with {record_channels} channel(s), will output as stereo")
+            
             with sd.InputStream(device=self.input_device, 
-                              channels=1, 
+                              channels=record_channels,
                               samplerate=self.fs,
                               dtype='float32',
                               callback=callback,
                               blocksize=2048,
                               latency='low'):
                 
+                print("Audio recording started")
                 while self.is_recording:
                     time.sleep(0.05)
                     
@@ -876,10 +905,9 @@ class ResearchApp:
         """Listen for global keyboard events with debouncing"""
         def on_press(key):
             if not self.is_recording:
-                return False  # Stop listener if not recording
+                return False
             
             try:
-                # Get key identifier
                 if hasattr(key, 'char') and key.char:
                     k = key.char
                 else:
@@ -887,23 +915,18 @@ class ResearchApp:
             except Exception:
                 k = str(key)
             
-            # Only record alphanumeric keys (0-9, a-z)
             is_valid_key = (k and len(k) == 1 and (k.isalnum() or k.isdigit()))
             
             if is_valid_key:
-                # KEY DEBOUNCING: Check if this key was recently recorded
                 current_time = time.time()
                 with self.keys_lock:
                     last_time = self.pressed_keys.get(k, 0)
                     time_since_last = current_time - last_time
                     
-                    # Only record if enough time has passed since last recording of this key
                     if time_since_last >= self.key_debounce_time:
                         self.pressed_keys[k] = current_time
-                        # Save audio in separate thread to avoid blocking
                         threading.Thread(target=self.save_key_audio, args=(k,), daemon=True).start()
                     else:
-                        # Key is being held down or pressed too quickly - ignore
                         print(f"Debounced: {k} (time since last: {time_since_last:.3f}s)")
         
         def on_release(key):
@@ -924,7 +947,6 @@ class ResearchApp:
             existing_files = [f for f in os.listdir(key_folder) if f.endswith('.wav')]
             if not existing_files:
                 return 0
-            # Extract numbers from filenames like "0.wav", "1.wav", etc.
             numbers = []
             for f in existing_files:
                 try:
@@ -937,16 +959,13 @@ class ResearchApp:
             return 0
 
     def save_key_audio(self, key_label):
-        """Extract audio segment from buffer and save as WAV with sequential numbering in character-specific subfolders"""
-        # Clean key label for filename and folder - convert to lowercase
+        """Extract audio segment and save as STEREO WAV with EXACT 20948 samples"""
         clean_key = key_label.lower()
         
-        # Only allow alphanumeric characters (0-9, a-z)
         if not (len(clean_key) == 1 and clean_key.isalnum()):
             print(f"Skipping non-alphanumeric key: {key_label}")
             return
         
-        # Create key-specific subfolder
         key_folder = os.path.join(self.output_dir, clean_key)
         try:
             os.makedirs(key_folder, exist_ok=True)
@@ -954,35 +973,40 @@ class ResearchApp:
             print(f"Error creating key folder {key_folder}: {e}")
             return
         
-        # Get next sequential file number
         file_number = self.get_next_file_number(key_folder)
-        
         wav_filename = f"{file_number}.wav"
         wav_path = os.path.join(key_folder, wav_filename)
-        
-        # Update the relative path for metadata (includes subfolder)
         relative_wav_path = f"{clean_key}/{wav_filename}"
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         
         try:
-            # Extract the most recent segment
+            # Extract EXACTLY target_segment_samples from STEREO buffer
             with self.buffer_lock:
-                segment = self.audio_buffer[-self.segment_samples:].copy()
+                segment = self.audio_buffer[-self.target_segment_samples:, :].copy()
             
-            # Calculate audio levels BEFORE additional processing
+            # Verify exact length
+            if segment.shape[0] != self.target_segment_samples:
+                print(f"WARNING: Segment length mismatch: {segment.shape[0]} vs {self.target_segment_samples}")
+                # Pad or trim to exact length
+                if segment.shape[0] < self.target_segment_samples:
+                    padding = self.target_segment_samples - segment.shape[0]
+                    segment = np.pad(segment, ((0, padding), (0, 0)), mode='constant')
+                else:
+                    segment = segment[:self.target_segment_samples, :]
+            
+            # Calculate levels (average both channels)
             rms_level = np.sqrt(np.mean(segment**2))
             peak_level = np.max(np.abs(segment))
             
-            # NOISE FILTERING: Check if signal is above threshold
+            # Noise filtering
             if rms_level < self.noise_threshold:
-                # Signal is too weak - likely just noise
-                print(f"REJECTED (noise): {key_label} -> {file_number}.wav - RMS: {rms_level:.6f} < threshold: {self.noise_threshold:.6f}")
+                print(f"REJECTED (noise): {key_label} -> {file_number}.wav - RMS: {rms_level:.6f}")
                 self.keys_rejected += 1
                 self.root.after(0, self.update_stats)
                 return
             
-            # Signal is valid - determine quality
+            # Quality assessment
             if rms_level > self.noise_threshold * 5:
                 quality = "good"
             elif rms_level > self.noise_threshold * 2:
@@ -990,29 +1014,26 @@ class ResearchApp:
             else:
                 quality = "weak"
             
-            # Better normalization strategy
+            # Normalization
             if peak_level > 0.001:
-                # Use adaptive scaling based on peak level
-                # Target peak at 70% to avoid clipping while maintaining dynamics
                 scale_factor = 0.7 / peak_level
                 segment_normalized = segment * scale_factor
             else:
                 segment_normalized = segment
             
-            # Clip to prevent overflow
             segment_normalized = np.clip(segment_normalized, -1.0, 1.0)
             
-            # Convert to int16 for WAV file
+            # Convert to int16 STEREO
             segment_int16 = np.int16(segment_normalized * 32767)
             
-            # Save WAV file
+            # Save STEREO WAV file
             with wave.open(wav_path, 'w') as wf:
-                wf.setnchannels(1)
+                wf.setnchannels(2)  # STEREO
                 wf.setsampwidth(2)
                 wf.setframerate(self.fs)
                 wf.writeframes(segment_int16.tobytes())
             
-            # Write metadata with audio levels, quality, and session info
+            # Write metadata
             with open(self.metadata_file, "a", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=self.metadata_fields)
                 writer.writerow({
@@ -1025,14 +1046,15 @@ class ResearchApp:
                     "mic_id": self.mic_id,
                     "keyboard_id": self.keyboard_id,
                     "session_id": self.session_id,
-                    "file_number": file_number
+                    "file_number": file_number,
+                    "channels": 2,
+                    "samples": self.target_segment_samples
                 })
             
-            # Update stats
             self.keys_recorded += 1
             self.root.after(0, self.update_stats)
             
-            print(f"SAVED [{quality}]: {key_label} -> {self.session_folder}/{relative_wav_path} (RMS: {rms_level:.4f}, Peak: {peak_level:.4f})")
+            print(f"SAVED [{quality}]: {key_label} -> {relative_wav_path} (STEREO, {self.target_segment_samples} samples, RMS: {rms_level:.4f})")
             
         except Exception as e:
             print(f"Error saving key audio: {e}")
