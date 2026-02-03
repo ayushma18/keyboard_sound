@@ -64,7 +64,7 @@ class AudioAnalyzer:
                                        bg="#2196F3", fg="white", font=("Arial", 10, "bold"))
         self.load_file_btn.pack(side=tk.LEFT, padx=5)
         
-        self.load_folder_btn = tk.Button(btn_frame, text="Load Folder", command=self.load_folder,
+        self.load_folder_btn = tk.Button(btn_frame, text="Load Folder (Recursive)", command=self.load_folder,
                                         bg="#4CAF50", fg="white", font=("Arial", 10, "bold"))
         self.load_folder_btn.pack(side=tk.LEFT, padx=5)
         
@@ -92,8 +92,8 @@ class AudioAnalyzer:
         btn_row1.pack(pady=2)
         
         self.play_btn = tk.Button(btn_row1, text="▶ Play", command=self.play_audio,
-                                  bg="#4CAF50", fg="white", font=("Arial", 10, "bold"),
-                                  state=tk.DISABLED, width=8)
+                                 bg="#4CAF50", fg="white", font=("Arial", 10, "bold"),
+                                 state=tk.DISABLED, width=8)
         self.play_btn.pack(side=tk.LEFT, padx=2)
         
         self.pause_btn = tk.Button(btn_row1, text="⏸ Pause", command=self.pause_audio,
@@ -184,7 +184,6 @@ class AudioAnalyzer:
         # Keyboard shortcuts help
         shortcuts_frame = tk.Frame(main_frame)
         shortcuts_frame.pack(fill=tk.X, pady=(5, 5))
-        
         shortcuts_text = "⌨️ Keyboard Shortcuts: [SPACE] Play/Pause | [ESC] Stop | [←] Back 0.1s | [→] Forward 0.1s"
         shortcuts_label = tk.Label(shortcuts_frame, text=shortcuts_text, font=("Arial", 8, "bold"),
                                   fg="#1976D2", justify=tk.CENTER)
@@ -206,10 +205,15 @@ class AudioAnalyzer:
         self.compare_tab = tk.Frame(self.notebook)
         self.notebook.add(self.compare_tab, text="Comparison View")
         
+        # Tab 4: Bulk view - NEW
+        self.bulk_tab = tk.Frame(self.notebook)
+        self.notebook.add(self.bulk_tab, text="Bulk View")
+        
         # Create matplotlib figures
         self.create_main_plots()
         self.create_detail_plots()
         self.create_comparison_plots()
+        self.create_bulk_plots()
 
     def create_main_plots(self):
         """Create main analysis plots"""
@@ -239,6 +243,30 @@ class AudioAnalyzer:
         toolbar = NavigationToolbar2Tk(self.compare_canvas, self.compare_tab)
         toolbar.update()
 
+    def create_bulk_plots(self):
+        """Create bulk view plots - NEW"""
+        self.bulk_fig = Figure(figsize=(12, 8))
+        self.bulk_canvas = FigureCanvasTkAgg(self.bulk_fig, master=self.bulk_tab)
+        
+        # Add scrollbar
+        scrollbar = tk.Scrollbar(self.bulk_tab)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        canvas_widget = self.bulk_canvas.get_tk_widget()
+        canvas_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        toolbar = NavigationToolbar2Tk(self.bulk_canvas, self.bulk_tab)
+        toolbar.update()
+
+    def find_wav_files_recursive(self, folder):
+        """Recursively find all WAV files in folder and subfolders"""
+        wav_files = []
+        for root, dirs, files in os.walk(folder):
+            for file in files:
+                if file.lower().endswith('.wav'):
+                    wav_files.append(os.path.join(root, file))
+        return sorted(wav_files)
+
     def load_single_file(self):
         """Load a single audio file"""
         filepath = filedialog.askopenfilename(
@@ -253,16 +281,18 @@ class AudioAnalyzer:
             self.next_btn.config(state=tk.DISABLED)
 
     def load_folder(self):
-        """Load all WAV files from a folder"""
+        """Load all WAV files from a folder recursively"""
         folder = filedialog.askdirectory(title="Select Folder with WAV Files")
         if folder:
-            self.file_list = [os.path.join(folder, f) for f in os.listdir(folder) 
-                            if f.lower().endswith('.wav')]
+            # Find all WAV files recursively
+            self.file_list = self.find_wav_files_recursive(folder)
+            
             if not self.file_list:
-                messagebox.showwarning("No Files", "No WAV files found in the selected folder.")
+                messagebox.showwarning("No Files", "No WAV files found in the selected folder and subfolders.")
                 return
             
-            self.file_list.sort()
+            messagebox.showinfo("Files Found", f"Found {len(self.file_list)} WAV files in folder and subfolders.")
+            
             self.current_index = 0
             self.load_audio(self.file_list[0])
             self.prev_btn.config(state=tk.NORMAL if len(self.file_list) > 1 else tk.DISABLED)
@@ -270,6 +300,8 @@ class AudioAnalyzer:
             
             # Update comparison view
             self.update_comparison_view()
+            # Update bulk view - NEW
+            self.update_bulk_view()
 
     def previous_file(self):
         """Load previous file in list"""
@@ -283,6 +315,44 @@ class AudioAnalyzer:
             self.current_index += 1
             self.load_audio(self.file_list[self.current_index])
 
+    def load_audio_robust(self, filepath):
+        """Load audio file with support for multiple WAV formats including IEEE float"""
+        try:
+            # Try scipy first - it handles more formats
+            sample_rate, audio_data = wavfile.read(filepath)
+            
+            # Convert to float32 and normalize
+            if audio_data.dtype == np.int16:
+                audio_data = audio_data.astype(np.float32) / 32768.0
+            elif audio_data.dtype == np.int32:
+                audio_data = audio_data.astype(np.float32) / 2147483648.0
+            elif audio_data.dtype == np.float32:
+                # Already float, but ensure it's in [-1, 1] range
+                audio_data = np.clip(audio_data, -1.0, 1.0)
+            elif audio_data.dtype == np.float64:
+                audio_data = audio_data.astype(np.float32)
+                audio_data = np.clip(audio_data, -1.0, 1.0)
+            else:
+                # Try to convert other formats
+                audio_data = audio_data.astype(np.float32)
+                # Normalize if needed
+                if np.max(np.abs(audio_data)) > 1.0:
+                    audio_data = audio_data / np.max(np.abs(audio_data))
+            
+            # Handle stereo - convert to mono
+            if len(audio_data.shape) > 1:
+                audio_data = np.mean(audio_data, axis=1)
+            
+            return sample_rate, audio_data
+            
+        except Exception as e:
+            # Fallback to librosa if scipy fails
+            try:
+                audio_data, sample_rate = librosa.load(filepath, sr=None, mono=True)
+                return sample_rate, audio_data
+            except Exception as e2:
+                raise Exception(f"Failed to load with both scipy and librosa: {e}, {e2}")
+
     def load_audio(self, filepath):
         """Load audio file and analyze it"""
         # Stop any current playback
@@ -290,24 +360,23 @@ class AudioAnalyzer:
             self.stop_audio()
         
         try:
-            # Read WAV file
-            with wave.open(filepath, 'r') as wav_file:
-                self.sample_rate = wav_file.getframerate()
-                n_frames = wav_file.getnframes()
-                audio_bytes = wav_file.readframes(n_frames)
-                
-                # Convert to numpy array - keep original format
-                if wav_file.getsampwidth() == 2:
-                    self.audio_data = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
-                    self.audio_data = self.audio_data / 32768.0  # Normalize to [-1, 1]
-                else:
-                    self.audio_data = np.frombuffer(audio_bytes, dtype=np.float32)
-            
+            # Use robust audio loading
+            self.sample_rate, self.audio_data = self.load_audio_robust(filepath)
             self.current_file = filepath
             
             # Update UI
             filename = os.path.basename(filepath)
-            self.file_label.config(text=f"File: {filename}")
+            # Show relative path if in folder
+            if len(self.file_list) > 1:
+                try:
+                    common_path = os.path.commonpath(self.file_list)
+                    rel_path = os.path.relpath(filepath, common_path)
+                    self.file_label.config(text=f"File: {rel_path}")
+                except:
+                    self.file_label.config(text=f"File: {filename}")
+            else:
+                self.file_label.config(text=f"File: {filename}")
+            
             duration = len(self.audio_data) / self.sample_rate
             self.info_label.config(
                 text=f"Sample Rate: {self.sample_rate} Hz | Duration: {duration:.3f} s | "
@@ -326,7 +395,8 @@ class AudioAnalyzer:
             self.update_statistics()
             
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to load audio file:\n{e}")
+            messagebox.showerror("Error", f"Failed to load audio file:\n{filepath}\n\nError: {e}")
+            print(f"Error loading {filepath}: {e}")
 
     def update_plots(self):
         """Update all visualization plots"""
@@ -375,8 +445,7 @@ class AudioAnalyzer:
             hop_length = fft_size // 4
             
             f, t, Sxx = signal.spectrogram(
-                self.audio_data,
-                self.sample_rate,
+                self.audio_data, self.sample_rate,
                 window=self.window_var.get(),
                 nperseg=fft_size,
                 noverlap=fft_size - hop_length
@@ -398,24 +467,16 @@ class AudioAnalyzer:
             
             # Calculate Mel Spectrogram
             mel_spec = librosa.feature.melspectrogram(
-                y=self.audio_data,
-                sr=self.sample_rate,
-                n_fft=fft_size,
-                hop_length=fft_size // 4,
-                n_mels=128,
-                fmin=0,
-                fmax=self.sample_rate / 2
+                y=self.audio_data, sr=self.sample_rate,
+                n_fft=fft_size, hop_length=fft_size // 4,
+                n_mels=128, fmin=0, fmax=self.sample_rate / 2
             )
             
             # Convert to dB
             mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
             img = librosa.display.specshow(
-                mel_spec_db,
-                x_axis='time',
-                y_axis='mel',
-                sr=self.sample_rate,
-                ax=ax,
-                cmap='magma'
+                mel_spec_db, x_axis='time', y_axis='mel',
+                sr=self.sample_rate, ax=ax, cmap='magma'
             )
             ax.set_ylabel('Mel Frequency')
             ax.set_title('Mel Spectrogram (dB) - Perceptually Scaled', fontweight='bold')
@@ -429,7 +490,8 @@ class AudioAnalyzer:
             # Calculate energy envelope
             hop_length = 512
             energy = librosa.feature.rms(y=self.audio_data, hop_length=hop_length)[0]
-            energy_times = librosa.frames_to_time(np.arange(len(energy)), sr=self.sample_rate, hop_length=hop_length)
+            energy_times = librosa.frames_to_time(np.arange(len(energy)),
+                                                  sr=self.sample_rate, hop_length=hop_length)
             
             ax.plot(energy_times, energy, label='RMS Energy', color='green', linewidth=2)
             
@@ -440,9 +502,10 @@ class AudioAnalyzer:
             onset_times_detected = librosa.frames_to_time(onsets, sr=self.sample_rate)
             
             ax2 = ax.twinx()
-            ax2.plot(onset_times, onset_env, label='Onset Strength', color='orange', alpha=0.7, linewidth=1.5)
-            ax2.vlines(onset_times_detected, 0, onset_env.max(), color='red', alpha=0.8, 
-                      linestyle='--', linewidth=2, label='Detected Onsets')
+            ax2.plot(onset_times, onset_env, label='Onset Strength', color='orange',
+                    alpha=0.7, linewidth=1.5)
+            ax2.vlines(onset_times_detected, 0, onset_env.max(), color='red',
+                      alpha=0.8, linestyle='--', linewidth=2, label='Detected Onsets')
             
             ax.set_ylabel('RMS Energy', color='green')
             ax2.set_ylabel('Onset Strength', color='orange')
@@ -459,7 +522,8 @@ class AudioAnalyzer:
             
             # Calculate MFCCs
             mfccs = librosa.feature.mfcc(y=self.audio_data, sr=self.sample_rate, n_mfcc=13)
-            img = librosa.display.specshow(mfccs, x_axis='time', sr=self.sample_rate, ax=ax, cmap='coolwarm')
+            img = librosa.display.specshow(mfccs, x_axis='time', sr=self.sample_rate,
+                                          ax=ax, cmap='coolwarm')
             ax.set_ylabel('MFCC Coefficients')
             ax.set_title('MFCC Heatmap', fontweight='bold')
             self.main_fig.colorbar(img, ax=ax, label='MFCC Value')
@@ -485,33 +549,33 @@ class AudioAnalyzer:
         ax1 = self.detail_fig.add_subplot(2, 2, 1)
         D = librosa.stft(self.audio_data, n_fft=fft_size)
         S_db = librosa.amplitude_to_db(np.abs(D), ref=np.max)
-        img1 = librosa.display.specshow(S_db, x_axis='time', y_axis='linear', 
-                                       sr=self.sample_rate, ax=ax1, cmap='magma')
+        img1 = librosa.display.specshow(S_db, x_axis='time', y_axis='linear',
+                                        sr=self.sample_rate, ax=ax1, cmap='magma')
         ax1.set_title('Linear Frequency Spectrogram', fontweight='bold')
         self.detail_fig.colorbar(img1, ax=ax1, format='%+2.0f dB')
         
         # 2. Log frequency spectrogram
         ax2 = self.detail_fig.add_subplot(2, 2, 2)
-        img2 = librosa.display.specshow(S_db, x_axis='time', y_axis='log', 
-                                       sr=self.sample_rate, ax=ax2, cmap='magma')
+        img2 = librosa.display.specshow(S_db, x_axis='time', y_axis='log',
+                                        sr=self.sample_rate, ax=ax2, cmap='magma')
         ax2.set_title('Log Frequency Spectrogram', fontweight='bold')
         self.detail_fig.colorbar(img2, ax=ax2, format='%+2.0f dB')
         
         # 3. Mel spectrogram
         ax3 = self.detail_fig.add_subplot(2, 2, 3)
-        mel_spec = librosa.feature.melspectrogram(y=self.audio_data, sr=self.sample_rate, 
+        mel_spec = librosa.feature.melspectrogram(y=self.audio_data, sr=self.sample_rate,
                                                  n_fft=fft_size, n_mels=128)
         mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
-        img3 = librosa.display.specshow(mel_spec_db, x_axis='time', y_axis='mel', 
-                                       sr=self.sample_rate, ax=ax3, cmap='viridis')
+        img3 = librosa.display.specshow(mel_spec_db, x_axis='time', y_axis='mel',
+                                        sr=self.sample_rate, ax=ax3, cmap='viridis')
         ax3.set_title('Mel Spectrogram', fontweight='bold')
         self.detail_fig.colorbar(img3, ax=ax3, format='%+2.0f dB')
         
         # 4. Chromagram
         ax4 = self.detail_fig.add_subplot(2, 2, 4)
         chroma = librosa.feature.chroma_stft(y=self.audio_data, sr=self.sample_rate)
-        img4 = librosa.display.specshow(chroma, x_axis='time', y_axis='chroma', 
-                                       sr=self.sample_rate, ax=ax4, cmap='coolwarm')
+        img4 = librosa.display.specshow(chroma, x_axis='time', y_axis='chroma',
+                                        sr=self.sample_rate, ax=ax4, cmap='coolwarm')
         ax4.set_title('Chromagram', fontweight='bold')
         self.detail_fig.colorbar(img4, ax=ax4)
         
@@ -535,17 +599,8 @@ class AudioAnalyzer:
         
         for idx, filepath in enumerate(files_to_compare):
             try:
-                # Load audio
-                with wave.open(filepath, 'r') as wav_file:
-                    sr = wav_file.getframerate()
-                    n_frames = wav_file.getnframes()
-                    audio_bytes = wav_file.readframes(n_frames)
-                    
-                    if wav_file.getsampwidth() == 2:
-                        audio = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
-                        audio = audio / 32768.0
-                    else:
-                        audio = np.frombuffer(audio_bytes, dtype=np.float32)
+                # Load audio with robust method
+                sr, audio = self.load_audio_robust(filepath)
                 
                 # Create subplot
                 ax = self.compare_fig.add_subplot(n_rows, n_cols, idx + 1)
@@ -554,7 +609,7 @@ class AudioAnalyzer:
                 mel_spec = librosa.feature.melspectrogram(y=audio, sr=sr, n_mels=64)
                 mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
                 librosa.display.specshow(mel_spec_db, x_axis='time', y_axis='mel',
-                                       sr=sr, ax=ax, cmap='viridis')
+                                        sr=sr, ax=ax, cmap='viridis')
                 
                 filename = os.path.basename(filepath)
                 # Extract key from filename
@@ -566,10 +621,79 @@ class AudioAnalyzer:
             except Exception as e:
                 print(f"Error loading {filepath}: {e}")
         
-        self.compare_fig.suptitle(f'Comparison of {n_files} Audio Files (Mel Spectrograms)', 
+        self.compare_fig.suptitle(f'Comparison of {n_files} Audio Files (Mel Spectrograms)',
                                  fontweight='bold', fontsize=12)
         self.compare_fig.tight_layout()
         self.compare_canvas.draw()
+
+    def update_bulk_view(self):
+        """Update bulk view showing waveforms of all files - NEW"""
+        if not self.file_list:
+            return
+        
+        self.bulk_fig.clear()
+        
+        n_files = len(self.file_list)
+        
+        # Create progress dialog
+        progress_window = tk.Toplevel(self.root)
+        progress_window.title("Loading Audio Files")
+        progress_window.geometry("400x100")
+        progress_label = tk.Label(progress_window, text="Loading files...")
+        progress_label.pack(pady=10)
+        progress_bar = ttk.Progressbar(progress_window, length=300, mode='determinate', maximum=n_files)
+        progress_bar.pack(pady=10)
+        progress_window.update()
+        
+        # Load and plot all files
+        for idx, filepath in enumerate(self.file_list):
+            try:
+                # Update progress
+                progress_label.config(text=f"Loading file {idx+1}/{n_files}...")
+                progress_bar['value'] = idx + 1
+                progress_window.update()
+                
+                # Load audio
+                sr, audio = self.load_audio_robust(filepath)
+                
+                # Create subplot
+                ax = self.bulk_fig.add_subplot(n_files, 1, idx + 1)
+                
+                # Plot waveform
+                time_axis = np.arange(len(audio)) / sr
+                ax.plot(time_axis, audio, linewidth=0.5, color='blue')
+                
+                # Get filename info
+                filename = os.path.basename(filepath)
+                # Show relative path if possible
+                try:
+                    common_path = os.path.commonpath(self.file_list)
+                    rel_path = os.path.relpath(filepath, common_path)
+                    label = rel_path
+                except:
+                    label = filename
+                
+                ax.set_ylabel(f'{idx+1}', fontsize=8)
+                ax.set_title(label, fontsize=8, loc='left')
+                ax.set_xlim(0, time_axis[-1])
+                ax.grid(True, alpha=0.3)
+                
+                # Only show x-axis label on last plot
+                if idx < n_files - 1:
+                    ax.set_xticklabels([])
+                else:
+                    ax.set_xlabel('Time (s)')
+                
+            except Exception as e:
+                print(f"Error loading {filepath}: {e}")
+        
+        # Close progress dialog
+        progress_window.destroy()
+        
+        self.bulk_fig.suptitle(f'Bulk View - All {n_files} Audio Files',
+                              fontweight='bold', fontsize=14)
+        self.bulk_fig.tight_layout()
+        self.bulk_canvas.draw()
 
     def update_statistics(self):
         """Calculate and display audio statistics"""
@@ -595,7 +719,7 @@ class AudioAnalyzer:
 Duration: {duration:.4f} s | Sample Rate: {self.sample_rate} Hz | Samples: {len(self.audio_data)}
 RMS Energy: {rms:.6f} | Peak Amplitude: {peak:.6f} | Total Energy: {energy:.6f}
 Zero Crossing Rate: {zcr:.6f} | Spectral Centroid: {np.mean(spec_centroid):.2f} Hz | Bandwidth: {np.mean(spec_bandwidth):.2f} Hz
-        """
+"""
         
         self.stats_text.delete(1.0, tk.END)
         self.stats_text.insert(1.0, stats_text)
@@ -641,7 +765,6 @@ Zero Crossing Rate: {zcr:.6f} | Spectral Centroid: {np.mean(spec_centroid):.2f} 
         self.is_playing = False
         self.is_paused = False
         self.playback_position = 0
-        
         self.play_btn.config(state=tk.NORMAL)
         self.pause_btn.config(state=tk.DISABLED)
         self.stop_btn.config(state=tk.DISABLED)
@@ -765,12 +888,8 @@ Zero Crossing Rate: {zcr:.6f} | Spectral Centroid: {np.mean(spec_centroid):.2f} 
         # Draw new line ONLY on waveform axis
         if self.waveform_ax is not None:
             self.waveform_line = self.waveform_ax.axvline(
-                x=current_time, 
-                color='red', 
-                linewidth=2.5, 
-                linestyle='-', 
-                alpha=0.7, 
-                zorder=10
+                x=current_time, color='red', linewidth=2.5,
+                linestyle='-', alpha=0.7, zorder=10
             )
             
             # Use blit for faster updates
@@ -787,7 +906,6 @@ Zero Crossing Rate: {zcr:.6f} | Spectral Centroid: {np.mean(spec_centroid):.2f} 
             except:
                 pass
             self.waveform_line = None
-            
             try:
                 self.main_canvas.draw_idle()
             except:
@@ -835,7 +953,8 @@ Zero Crossing Rate: {zcr:.6f} | Spectral Centroid: {np.mean(spec_centroid):.2f} 
             return
         
         skip_samples = int(0.1 * self.sample_rate)
-        self.playback_position = min(len(self.audio_data) - 1, self.playback_position + skip_samples)
+        self.playback_position = min(len(self.audio_data) - 1, 
+                                    self.playback_position + skip_samples)
         
         # Update display
         current_time = self.playback_position / self.sample_rate

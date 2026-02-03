@@ -12,6 +12,7 @@ from datetime import datetime
 import queue
 import json
 from scipy import signal
+from scipy.ndimage import gaussian_filter1d
 
 
 class ResearchApp:
@@ -62,6 +63,9 @@ class ResearchApp:
         self.noise_reduction_strength = 1.5  # How aggressively to reduce noise
         self.enable_noise_reduction = True
         
+        # Peak centering (new feature)
+        self.enable_peak_centering = True
+        
         # Microphone and Keyboard IDs
         self.mic_id = "mic1"
         self.keyboard_id = "kb1"
@@ -72,7 +76,8 @@ class ResearchApp:
         self.output_dir = None
         self.metadata_file = None
         self.metadata_fields = ["timestamp", "key", "wav_file", "rms_level", "peak_level", "quality", 
-                               "mic_id", "keyboard_id", "session_id", "file_number", "channels", "samples"]
+                               "mic_id", "keyboard_id", "session_id", "file_number", "channels", "samples", 
+                               "peak_centered", "filter_mode", "filter_range"]
         
         # Configuration file for storing IDs
         self.config_file = "recording_config.json"
@@ -146,12 +151,40 @@ class ResearchApp:
             self.folder_label.config(text=f"Recording to: {self.session_folder}/")
 
     def build_ui(self):
-        # Main container
-        main_frame = tk.Frame(self.root, padx=10, pady=10)
+        # Create main container with scrollbar
+        main_container = tk.Frame(self.root)
+        main_container.pack(fill=tk.BOTH, expand=True)
+        
+        # Create canvas for scrolling
+        canvas = tk.Canvas(main_container)
+        scrollbar = tk.Scrollbar(main_container, orient="vertical", command=canvas.yview)
+        
+        # Create scrollable frame
+        scrollable_frame = tk.Frame(canvas)
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Pack scrollbar and canvas
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        
+        # Enable mouse wheel scrolling
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        
+        # Main frame (now inside scrollable frame)
+        main_frame = tk.Frame(scrollable_frame, padx=10, pady=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # Title
-        title_label = tk.Label(main_frame, text="Keyboard Acoustic Recorder", 
+        title_label = tk.Label(main_frame, text="Keyboard Acoustic Recorder (Peak-Centered)", 
                               font=("Arial", 16, "bold"))
         title_label.pack(pady=(0, 10))
         
@@ -160,7 +193,7 @@ class ResearchApp:
                                     font=("Arial", 9, "bold"), padx=10, pady=5, bg="#E3F2FD")
         format_frame.pack(fill=tk.X, pady=(0, 10))
         
-        format_text = f"✓ Stereo (2 channels) - mono mics auto-converted\n✓ 44.1 kHz sample rate\n✓ {self.target_segment_samples} samples per key (~{self.segment_duration:.3f}s)\n✓ Produces 64 time frames for model"
+        format_text = f"✓ Stereo (2 channels) - mono mics auto-converted\n✓ 44.1 kHz sample rate\n✓ {self.target_segment_samples} samples per key (~{self.segment_duration:.3f}s)\n✓ Peak detection & intelligent extraction (handles rapid typing)\n✓ Dynamic frequency filtering - see Frequency Filtering section below"
         format_label = tk.Label(format_frame, text=format_text, 
                             font=("Arial", 8), fg="#1565C0", justify=tk.LEFT, bg="#E3F2FD")
         format_label.pack(pady=2)
@@ -227,7 +260,7 @@ class ResearchApp:
         refresh_btn.grid(row=0, column=2, rowspan=2, padx=5, pady=5)
         
         # Noise Calibration Section
-        noise_frame = tk.LabelFrame(main_frame, text="Noise Reduction", 
+        noise_frame = tk.LabelFrame(main_frame, text="Audio Processing", 
                                    font=("Arial", 10, "bold"), padx=10, pady=10)
         noise_frame.pack(fill=tk.X, pady=(0, 10))
         
@@ -260,6 +293,67 @@ class ResearchApp:
         nr_scale.pack(side=tk.LEFT, padx=5)
         self.nr_strength_label = tk.Label(nr_controls, text="1.5")
         self.nr_strength_label.pack(side=tk.LEFT, padx=5)
+        
+        # Peak centering toggle
+        peak_controls = tk.Frame(noise_frame)
+        peak_controls.pack(fill=tk.X, pady=5)
+        
+        self.peak_var = tk.BooleanVar(value=True)
+        peak_check = tk.Checkbutton(peak_controls, text="Enable Peak Centering (recommended)", 
+                                    variable=self.peak_var, command=self.toggle_peak_centering)
+        peak_check.pack(side=tk.LEFT, padx=5)
+        
+        # Frequency Filtering Section
+        freq_frame = tk.LabelFrame(main_frame, text="Frequency Filtering (Advanced)", 
+                                  font=("Arial", 10, "bold"), padx=10, pady=10, bg="#FFF8E1")
+        freq_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Filtering mode selection
+        filter_mode_frame = tk.Frame(freq_frame, bg="#FFF8E1")
+        filter_mode_frame.pack(fill=tk.X, pady=5)
+        
+        tk.Label(filter_mode_frame, text="Filtering Mode:", bg="#FFF8E1", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=5)
+        
+        self.filter_mode = tk.StringVar(value="optimal")
+        
+        modes = [
+            ("Optimal ML (50Hz-5kHz) ⭐", "optimal"),
+            ("Match Dataset (50Hz-3kHz)", "dataset"),
+            ("Extended (50Hz-8kHz)", "extended"),
+            ("No Filtering (Raw)", "none")
+        ]
+        
+        for text, value in modes:
+            rb = tk.Radiobutton(filter_mode_frame, text=text, variable=self.filter_mode, 
+                               value=value, bg="#FFF8E1", command=self.update_filter_mode)
+            rb.pack(side=tk.LEFT, padx=5)
+        
+        # Filter info display
+        self.filter_info_label = tk.Label(freq_frame, text="", bg="#FFF8E1", 
+                                         font=("Arial", 8), fg="#F57C00", justify=tk.LEFT)
+        self.filter_info_label.pack(pady=3)
+        self.update_filter_info()
+        
+        # Custom frequency range (for advanced users)
+        custom_freq_frame = tk.Frame(freq_frame, bg="#FFF8E1")
+        custom_freq_frame.pack(fill=tk.X, pady=5)
+        
+        self.custom_freq_var = tk.BooleanVar(value=False)
+        custom_check = tk.Checkbutton(custom_freq_frame, text="Custom Range:", 
+                                     variable=self.custom_freq_var, bg="#FFF8E1",
+                                     command=self.toggle_custom_freq)
+        custom_check.pack(side=tk.LEFT, padx=5)
+        
+        tk.Label(custom_freq_frame, text="Low:", bg="#FFF8E1").pack(side=tk.LEFT, padx=2)
+        self.custom_low_entry = tk.Entry(custom_freq_frame, width=6, state=tk.DISABLED)
+        self.custom_low_entry.insert(0, "50")
+        self.custom_low_entry.pack(side=tk.LEFT, padx=2)
+        
+        tk.Label(custom_freq_frame, text="Hz  High:", bg="#FFF8E1").pack(side=tk.LEFT, padx=2)
+        self.custom_high_entry = tk.Entry(custom_freq_frame, width=6, state=tk.DISABLED)
+        self.custom_high_entry.insert(0, "5000")
+        self.custom_high_entry.pack(side=tk.LEFT, padx=2)
+        tk.Label(custom_freq_frame, text="Hz", bg="#FFF8E1").pack(side=tk.LEFT, padx=2)
         
         # Microphone Test Section
         test_frame = tk.LabelFrame(main_frame, text="Microphone Test", 
@@ -329,13 +423,16 @@ class ResearchApp:
         self.stop_button.pack(side=tk.LEFT, padx=5)
         
         # Info Label
-        info_text = "Instructions:\n1. Set Microphone ID and Keyboard ID\n2. Select audio device (mono mics will be auto-converted to stereo)\n3. Calibrate background noise (stay quiet for 2 seconds)\n4. Test microphone\n5. Start recording and type 0-9, a-z!\n\nFormat: Stereo, 44.1kHz, 20948 samples (matches dataset requirement)\nFiles organized in folders (0-9, a-z) with sequential numbering"
+        info_text = "Instructions:\n1. Set Microphone ID and Keyboard ID\n2. Select audio device (mono mics will be auto-converted to stereo)\n3. Calibrate background noise (stay quiet for 2 seconds)\n4. Test microphone\n5. Start recording and type 0-9, a-z!\n\nFeatures: Peak centering, bandpass filtering (50Hz-5kHz), stereo output\nFrequency range optimized for keystroke ML: captures identity info, removes noise\nFormat: {samples} samples, 44.1kHz, matches research dataset".format(samples=self.target_segment_samples)
         info_label = tk.Label(main_frame, text=info_text, 
                             font=("Arial", 9), fg="gray", justify=tk.LEFT)
         info_label.pack(pady=(10, 0))
         
         # Set minimum window size
-        self.root.minsize(700, 800)
+        self.root.minsize(750, 700)
+        
+        # Set initial window size
+        self.root.geometry("750x700")
         
         # Initialize stats
         self.keys_recorded = 0
@@ -347,6 +444,66 @@ class ResearchApp:
         self.enable_noise_reduction = self.nr_var.get()
         status = "enabled" if self.enable_noise_reduction else "disabled"
         print(f"Noise reduction {status}")
+
+    def toggle_peak_centering(self):
+        """Toggle peak centering on/off"""
+        self.enable_peak_centering = self.peak_var.get()
+        status = "enabled" if self.enable_peak_centering else "disabled"
+        print(f"Peak centering {status}")
+
+    def update_filter_mode(self):
+        """Update filter parameters based on selected mode"""
+        mode = self.filter_mode.get()
+        self.update_filter_info()
+        print(f"Filter mode changed to: {mode}")
+
+    def update_filter_info(self):
+        """Update the filter info label based on current mode"""
+        mode = self.filter_mode.get()
+        
+        info_texts = {
+            "optimal": "✓ Keeps: 50-300Hz (impact), 300Hz-3kHz (identity), 3-5kHz (sharpness)\n✗ Removes: <50Hz (rumble), >5kHz (noise)\n→ Best for ML generalization",
+            "dataset": "✓ Keeps: 50-300Hz (impact), 300Hz-3kHz (identity)\n✗ Removes: <50Hz (rumble), >3kHz (click detail & noise)\n→ Matches research dataset exactly",
+            "extended": "✓ Keeps: 50-300Hz (impact), 300Hz-3kHz (identity), 3-8kHz (detail)\n✗ Removes: <50Hz (rumble), >8kHz (HF noise)\n→ Maximum keystroke detail (may overfit)",
+            "none": "⚠ Keeps: ALL frequencies (0-22kHz)\n→ Raw audio, no filtering (not recommended for ML)"
+        }
+        
+        self.filter_info_label.config(text=info_texts.get(mode, ""))
+
+    def toggle_custom_freq(self):
+        """Enable/disable custom frequency inputs"""
+        if self.custom_freq_var.get():
+            self.custom_low_entry.config(state=tk.NORMAL)
+            self.custom_high_entry.config(state=tk.NORMAL)
+            self.filter_mode.set("custom")
+            self.update_filter_info()
+        else:
+            self.custom_low_entry.config(state=tk.DISABLED)
+            self.custom_high_entry.config(state=tk.DISABLED)
+            self.filter_mode.set("optimal")
+            self.update_filter_info()
+
+    def get_filter_params(self):
+        """Get current filter parameters based on mode"""
+        mode = self.filter_mode.get()
+        
+        if mode == "none":
+            return None, None  # No filtering
+        elif mode == "optimal":
+            return 50, 5000
+        elif mode == "dataset":
+            return 50, 3000
+        elif mode == "extended":
+            return 50, 8000
+        elif mode == "custom":
+            try:
+                low = int(self.custom_low_entry.get())
+                high = int(self.custom_high_entry.get())
+                return low, high
+            except:
+                return 50, 5000  # Fallback to optimal
+        else:
+            return 50, 5000  # Default
 
     def update_nr_strength(self, value):
         """Update noise reduction strength"""
@@ -429,7 +586,7 @@ class ResearchApp:
         
         with self.noise_profile_lock:
             if self.noise_profile is None:
-                return self.apply_highpass_filter(audio_segment)
+                return self.apply_bandpass_filter(audio_segment)
         
         try:
             # Perform STFT on the audio segment
@@ -467,19 +624,20 @@ class ResearchApp:
             elif len(audio_reduced) < len(audio_segment):
                 audio_reduced = np.pad(audio_reduced, (0, len(audio_segment) - len(audio_reduced)))
             
-            audio_reduced = self.apply_highpass_filter(audio_reduced)
+            # Apply bandpass filter for smooth waveform
+            audio_reduced = self.apply_bandpass_filter(audio_reduced)
             
             return audio_reduced.astype(np.float32)
             
         except Exception as e:
             print(f"Error in noise reduction: {e}")
-            return self.apply_highpass_filter(audio_segment)
+            return self.apply_bandpass_filter(audio_segment)
 
     def apply_highpass_filter(self, audio_segment):
-        """Apply high-pass filter to remove low-frequency noise"""
+        """Apply high-pass filter at 50 Hz to remove DC drift and rumble"""
         try:
             nyquist = self.fs / 2
-            cutoff = 80  # Hz
+            cutoff = 50  # Hz - Remove DC drift, mic handling, table vibration
             order = 4
             
             b, a = signal.butter(order, cutoff / nyquist, btype='high')
@@ -489,6 +647,345 @@ class ResearchApp:
         except Exception as e:
             print(f"Error in high-pass filter: {e}")
             return audio_segment
+
+    def apply_lowpass_filter(self, audio_segment, cutoff=5000):
+        """Apply low-pass filter at 5 kHz to remove high-frequency noise"""
+        try:
+            nyquist = self.fs / 2
+            order = 4
+            
+            b, a = signal.butter(order, cutoff / nyquist, btype='low')
+            filtered = signal.filtfilt(b, a, audio_segment)
+            
+            return filtered.astype(np.float32)
+        except Exception as e:
+            print(f"Error in low-pass filter: {e}")
+            return audio_segment
+
+    def apply_bandpass_filter(self, audio_segment):
+        """
+        Apply band-pass filter with dynamic frequency range based on user settings.
+        
+        Default (Optimal ML): 50 Hz - 5 kHz
+        - 50-300 Hz: Mechanical impact, desk resonance
+        - 300 Hz - 3 kHz: Keycap & switch characteristics (MOST IDENTITY INFO)
+        - 3-5 kHz: Click sharpness, attack transient
+        
+        Removes:
+        - 0-50 Hz: DC drift, mic handling, table vibration
+        - >5 kHz: Noise, mic artifacts, poorly generalizable
+        """
+        try:
+            low_cutoff, high_cutoff = self.get_filter_params()
+            
+            # If no filtering requested, return original
+            if low_cutoff is None or high_cutoff is None:
+                return audio_segment
+            
+            nyquist = self.fs / 2
+            order = 4
+            
+            b, a = signal.butter(order, [low_cutoff / nyquist, high_cutoff / nyquist], btype='band')
+            filtered = signal.filtfilt(b, a, audio_segment)
+            
+            return filtered.astype(np.float32)
+        except Exception as e:
+            print(f"Error in band-pass filter: {e}")
+            return audio_segment
+
+    def smooth_audio(self, audio_segment):
+        """Apply smoothing to reduce noise and create cleaner waveform"""
+        try:
+            # Apply moving average smoothing
+            window_size = 5
+            kernel = np.ones(window_size) / window_size
+            smoothed = np.convolve(audio_segment, kernel, mode='same')
+            return smoothed.astype(np.float32)
+        except Exception as e:
+            print(f"Error in smoothing: {e}")
+            return audio_segment
+
+    def detect_keystroke_peak(self, audio_segment):
+        """
+        Detect the peak of the keystroke in the audio segment.
+        Returns the index of the peak.
+        """
+        try:
+            # Calculate energy envelope
+            energy = audio_segment ** 2
+            
+            # Apply smoothing to energy
+            window_size = int(self.fs * 0.01)  # 10ms window
+            if window_size % 2 == 0:
+                window_size += 1
+            
+            smoothed_energy = gaussian_filter1d(energy, sigma=window_size)
+            
+            # Find the peak
+            peak_idx = np.argmax(smoothed_energy)
+            
+            return peak_idx
+            
+        except Exception as e:
+            print(f"Error detecting peak: {e}")
+            # Return middle if detection fails
+            return len(audio_segment) // 2
+
+    def extract_keystroke_intelligently(self, audio_buffer_stereo, target_samples):
+        """
+        Intelligently extract keystroke with padding for rapid typing.
+        
+        For rapid typing where keystroke is very short:
+        1. Find the keystroke using energy detection
+        2. Extract just the keystroke region
+        3. Pad with silence to reach target_samples
+        4. Center the keystroke in the padded region
+        
+        Args:
+            audio_buffer_stereo: 2D array (samples, 2) - stereo buffer
+            target_samples: number of samples needed
+        
+        Returns:
+            Extracted and padded stereo audio segment
+        """
+        try:
+            # Work with mono for analysis
+            mono_signal = np.mean(audio_buffer_stereo, axis=1)
+            
+            # Apply bandpass filter for better detection
+            filtered_mono = self.apply_bandpass_filter(mono_signal)
+            
+            # Calculate energy
+            energy = filtered_mono ** 2
+            smoothed_energy = gaussian_filter1d(energy, sigma=int(self.fs * 0.005))
+            
+            # Define threshold for keystroke detection
+            energy_threshold = np.max(smoothed_energy) * 0.1  # 10% of peak
+            
+            # Find where energy exceeds threshold
+            above_threshold = smoothed_energy > energy_threshold
+            
+            if not np.any(above_threshold):
+                # No keystroke detected, use simple extraction
+                return audio_buffer_stereo[-target_samples:, :]
+            
+            # Find start and end of keystroke
+            keystroke_indices = np.where(above_threshold)[0]
+            start_idx = keystroke_indices[0]
+            end_idx = keystroke_indices[-1]
+            
+            # Add margin around keystroke (10ms before and after)
+            margin = int(self.fs * 0.01)  # 10ms
+            start_idx = max(0, start_idx - margin)
+            end_idx = min(len(audio_buffer_stereo), end_idx + margin)
+            
+            # Extract keystroke region
+            keystroke = audio_buffer_stereo[start_idx:end_idx, :]
+            keystroke_length = end_idx - start_idx
+            
+            print(f"Keystroke detected: {keystroke_length} samples ({keystroke_length/self.fs*1000:.1f}ms)")
+            
+            # If keystroke is already long enough, center it normally
+            if keystroke_length >= target_samples:
+                # Find peak within keystroke
+                peak_idx = self.detect_keystroke_peak(mono_signal[start_idx:end_idx])
+                
+                # Extract centered on peak
+                half_target = target_samples // 2
+                center_idx = start_idx + peak_idx
+                
+                extract_start = center_idx - half_target
+                extract_end = center_idx + (target_samples - half_target)
+                
+                if extract_start < 0:
+                    padding = -extract_start
+                    segment = audio_buffer_stereo[0:extract_end, :]
+                    segment = np.pad(segment, ((padding, 0), (0, 0)), mode='constant')
+                elif extract_end > len(audio_buffer_stereo):
+                    padding = extract_end - len(audio_buffer_stereo)
+                    segment = audio_buffer_stereo[extract_start:, :]
+                    segment = np.pad(segment, ((0, padding), (0, 0)), mode='constant')
+                else:
+                    segment = audio_buffer_stereo[extract_start:extract_end, :]
+                
+                return segment[:target_samples, :]
+            
+            # Keystroke is short - pad it
+            padding_needed = target_samples - keystroke_length
+            pad_before = padding_needed // 2
+            pad_after = padding_needed - pad_before
+            
+            # Pad with silence
+            padded = np.pad(keystroke, ((pad_before, pad_after), (0, 0)), mode='constant')
+            
+            print(f"Padded keystroke: {pad_before} samples before, {pad_after} after")
+            
+            return padded[:target_samples, :]
+            
+        except Exception as e:
+            print(f"Error in intelligent extraction: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fallback to simple extraction
+            return audio_buffer_stereo[-target_samples:, :]
+
+    def center_keystroke(self, audio_buffer_stereo, target_samples):
+        """
+        Intelligently extract keystroke with padding for rapid typing.
+        
+        For rapid typing where keystroke is very short:
+        1. Find the keystroke using energy detection
+        2. Extract just the keystroke region
+        3. Pad with silence to reach target_samples
+        4. Center the keystroke in the padded region
+        
+        Args:
+            audio_buffer_stereo: 2D array (samples, 2) - stereo buffer
+            target_samples: number of samples needed
+        
+        Returns:
+            Extracted and padded stereo audio segment
+        """
+        try:
+            # Work with mono for analysis
+            mono_signal = np.mean(audio_buffer_stereo, axis=1)
+            
+            # Apply bandpass filter for better detection
+            filtered_mono = self.apply_bandpass_filter(mono_signal)
+            
+            # Calculate energy
+            energy = filtered_mono ** 2
+            smoothed_energy = gaussian_filter1d(energy, sigma=int(self.fs * 0.005))
+            
+            # Define threshold for keystroke detection
+            energy_threshold = np.max(smoothed_energy) * 0.1  # 10% of peak
+            
+            # Find where energy exceeds threshold
+            above_threshold = smoothed_energy > energy_threshold
+            
+            if not np.any(above_threshold):
+                # No keystroke detected, use simple extraction
+                return audio_buffer_stereo[-target_samples:, :]
+            
+            # Find start and end of keystroke
+            keystroke_indices = np.where(above_threshold)[0]
+            start_idx = keystroke_indices[0]
+            end_idx = keystroke_indices[-1]
+            
+            # Add margin around keystroke (10ms before and after)
+            margin = int(self.fs * 0.01)  # 10ms
+            start_idx = max(0, start_idx - margin)
+            end_idx = min(len(audio_buffer_stereo), end_idx + margin)
+            
+            # Extract keystroke region
+            keystroke = audio_buffer_stereo[start_idx:end_idx, :]
+            keystroke_length = end_idx - start_idx
+            
+            print(f"Keystroke detected: {keystroke_length} samples ({keystroke_length/self.fs*1000:.1f}ms)")
+            
+            # If keystroke is already long enough, center it normally
+            if keystroke_length >= target_samples:
+                # Find peak within keystroke
+                peak_idx = self.detect_keystroke_peak(mono_signal[start_idx:end_idx])
+                
+                # Extract centered on peak
+                half_target = target_samples // 2
+                center_idx = start_idx + peak_idx
+                
+                extract_start = center_idx - half_target
+                extract_end = center_idx + (target_samples - half_target)
+                
+                if extract_start < 0:
+                    padding = -extract_start
+                    segment = audio_buffer_stereo[0:extract_end, :]
+                    segment = np.pad(segment, ((padding, 0), (0, 0)), mode='constant')
+                elif extract_end > len(audio_buffer_stereo):
+                    padding = extract_end - len(audio_buffer_stereo)
+                    segment = audio_buffer_stereo[extract_start:, :]
+                    segment = np.pad(segment, ((0, padding), (0, 0)), mode='constant')
+                else:
+                    segment = audio_buffer_stereo[extract_start:extract_end, :]
+                
+                return segment[:target_samples, :]
+            
+            # Keystroke is short - pad it
+            padding_needed = target_samples - keystroke_length
+            pad_before = padding_needed // 2
+            pad_after = padding_needed - pad_before
+            
+            # Pad with silence
+            padded = np.pad(keystroke, ((pad_before, pad_after), (0, 0)), mode='constant')
+            
+            print(f"Padded keystroke: {pad_before} samples before, {pad_after} after")
+            
+            return padded[:target_samples, :]
+            
+        except Exception as e:
+            print(f"Error in intelligent extraction: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fallback to simple extraction
+            return audio_buffer_stereo[-target_samples:, :]
+        """
+        Extract audio segment centered around the keystroke peak.
+        
+        Args:
+            audio_buffer_stereo: 2D array (samples, 2) - stereo buffer
+            target_samples: number of samples to extract
+        
+        Returns:
+            Centered stereo audio segment
+        """
+        try:
+            # Work with mono signal for peak detection (average channels)
+            mono_signal = np.mean(audio_buffer_stereo, axis=1)
+            
+            # Apply bandpass filter for better peak detection
+            filtered_mono = self.apply_bandpass_filter(mono_signal)
+            
+            # Detect peak in the recent portion (last 1 second)
+            search_window = int(self.fs * 1.0)  # Search in last 1 second
+            search_segment = filtered_mono[-search_window:]
+            
+            peak_idx_in_window = self.detect_keystroke_peak(search_segment)
+            peak_idx = len(filtered_mono) - search_window + peak_idx_in_window
+            
+            # Calculate extraction window centered on peak
+            half_target = target_samples // 2
+            
+            # Ensure we have enough samples before and after peak
+            start_idx = peak_idx - half_target
+            end_idx = peak_idx + (target_samples - half_target)
+            
+            # Handle edge cases
+            if start_idx < 0:
+                # Peak too early, pad beginning
+                padding = -start_idx
+                segment = audio_buffer_stereo[0:end_idx, :]
+                segment = np.pad(segment, ((padding, 0), (0, 0)), mode='constant')
+            elif end_idx > len(audio_buffer_stereo):
+                # Peak too late, pad end
+                padding = end_idx - len(audio_buffer_stereo)
+                segment = audio_buffer_stereo[start_idx:, :]
+                segment = np.pad(segment, ((0, padding), (0, 0)), mode='constant')
+            else:
+                # Normal case
+                segment = audio_buffer_stereo[start_idx:end_idx, :]
+            
+            # Verify exact length
+            if segment.shape[0] != target_samples:
+                if segment.shape[0] < target_samples:
+                    padding = target_samples - segment.shape[0]
+                    segment = np.pad(segment, ((0, padding), (0, 0)), mode='constant')
+                else:
+                    segment = segment[:target_samples, :]
+            
+            return segment
+            
+        except Exception as e:
+            print(f"Error centering keystroke: {e}")
+            # Fallback to simple extraction from end
+            return audio_buffer_stereo[-target_samples:, :]
 
     def update_session_ids(self):
         """Update microphone and keyboard IDs from UI"""
@@ -686,17 +1183,17 @@ class ResearchApp:
             else:
                 audio_stereo = indata.copy()
             
-            # Apply noise reduction if enabled - per channel
+            # Apply bandpass filter per channel for clean sound
+            audio_L = self.apply_bandpass_filter(audio_stereo[:, 0].copy())
+            audio_R = self.apply_bandpass_filter(audio_stereo[:, 1].copy())
+            
+            # Apply noise reduction if enabled
             if self.enable_noise_reduction and self.noise_profile is not None:
-                audio_L = self.apply_noise_reduction(audio_stereo[:, 0].copy())
-                audio_R = self.apply_noise_reduction(audio_stereo[:, 1].copy())
-                outdata[:, 0] = audio_L
-                outdata[:, 1] = audio_R
-            else:
-                audio_L = self.apply_highpass_filter(audio_stereo[:, 0].copy())
-                audio_R = self.apply_highpass_filter(audio_stereo[:, 1].copy())
-                outdata[:, 0] = audio_L
-                outdata[:, 1] = audio_R
+                audio_L = self.apply_noise_reduction(audio_L)
+                audio_R = self.apply_noise_reduction(audio_R)
+            
+            outdata[:, 0] = audio_L
+            outdata[:, 1] = audio_R
             
             # Calculate audio level
             level = np.sqrt(np.mean(outdata**2)) * 100
@@ -772,7 +1269,8 @@ class ResearchApp:
         self.root.after(1000, self.countdown_timer)
         
         nr_status = "ON" if self.enable_noise_reduction else "OFF"
-        self.status_label.config(text=f"Status: Recording (NR: {nr_status})... Type!", fg="red")
+        peak_status = "ON" if self.enable_peak_centering else "OFF"
+        self.status_label.config(text=f"Status: Recording (NR: {nr_status}, Peak: {peak_status})... Type!", fg="red")
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
         self.test_button.config(state=tk.DISABLED)
@@ -793,11 +1291,20 @@ class ResearchApp:
         device_info = sd.query_devices(self.input_device, 'input')
         record_channels = min(2, device_info['max_input_channels'])
         
+        # Get filter info
+        low_f, high_f = self.get_filter_params()
+        if low_f and high_f:
+            filter_text = f"{low_f} Hz - {high_f/1000:.1f} kHz"
+        else:
+            filter_text = "No filtering (raw)"
+        
         print(f"\n{'='*60}")
         print(f"RECORDING SESSION STARTED")
         print(f"Session ID: {self.session_id}")
         print(f"Input: {record_channels} channel{'s' if record_channels > 1 else ''} → Output: Stereo (2 channels)")
         print(f"Format: 2 channels, 44100 Hz, {self.target_segment_samples} samples")
+        print(f"Peak centering: {peak_status}")
+        print(f"Bandpass filter: {filter_text} (mode: {self.filter_mode.get()})")
         print(f"Microphone: {self.mic_id}")
         print(f"Keyboard: {self.keyboard_id}")
         print(f"Output folder: {self.output_dir}")
@@ -865,8 +1372,12 @@ class ResearchApp:
                 if audio_chunk.shape[1] == 1:
                     audio_chunk = np.repeat(audio_chunk, 2, axis=1)
                 
+                # Apply bandpass filter per channel for smoother sound
+                audio_chunk[:, 0] = self.apply_bandpass_filter(audio_chunk[:, 0])
+                audio_chunk[:, 1] = self.apply_bandpass_filter(audio_chunk[:, 1])
+                
                 # Apply noise reduction per channel if enabled
-                if self.enable_noise_reduction:
+                if self.enable_noise_reduction and self.noise_profile is not None:
                     audio_chunk[:, 0] = self.apply_noise_reduction(audio_chunk[:, 0])
                     audio_chunk[:, 1] = self.apply_noise_reduction(audio_chunk[:, 1])
                 
@@ -959,7 +1470,7 @@ class ResearchApp:
             return 0
 
     def save_key_audio(self, key_label):
-        """Extract audio segment and save as STEREO WAV with EXACT 20948 samples"""
+        """Extract audio segment and save as STEREO WAV with PEAK CENTERING and EXACT 18963 samples"""
         clean_key = key_label.lower()
         
         if not (len(clean_key) == 1 and clean_key.isalnum()):
@@ -981,9 +1492,17 @@ class ResearchApp:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         
         try:
-            # Extract EXACTLY target_segment_samples from STEREO buffer
+            # Extract segment with intelligent keystroke detection and padding
             with self.buffer_lock:
-                segment = self.audio_buffer[-self.target_segment_samples:, :].copy()
+                if self.enable_peak_centering:
+                    # Use intelligent extraction (handles rapid typing)
+                    segment = self.extract_keystroke_intelligently(
+                        self.audio_buffer.copy(), 
+                        self.target_segment_samples
+                    )
+                else:
+                    # Simple extraction from end
+                    segment = self.audio_buffer[-self.target_segment_samples:, :].copy()
             
             # Verify exact length
             if segment.shape[0] != self.target_segment_samples:
@@ -1033,6 +1552,13 @@ class ResearchApp:
                 wf.setframerate(self.fs)
                 wf.writeframes(segment_int16.tobytes())
             
+            # Get filter settings for metadata
+            low_f, high_f = self.get_filter_params()
+            if low_f and high_f:
+                filter_range = f"{low_f}-{high_f}Hz"
+            else:
+                filter_range = "none"
+            
             # Write metadata
             with open(self.metadata_file, "a", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=self.metadata_fields)
@@ -1048,13 +1574,17 @@ class ResearchApp:
                     "session_id": self.session_id,
                     "file_number": file_number,
                     "channels": 2,
-                    "samples": self.target_segment_samples
+                    "samples": self.target_segment_samples,
+                    "peak_centered": "yes" if self.enable_peak_centering else "no",
+                    "filter_mode": self.filter_mode.get(),
+                    "filter_range": filter_range
                 })
             
             self.keys_recorded += 1
             self.root.after(0, self.update_stats)
             
-            print(f"SAVED [{quality}]: {key_label} -> {relative_wav_path} (STEREO, {self.target_segment_samples} samples, RMS: {rms_level:.4f})")
+            peak_status = "PEAK-CENTERED" if self.enable_peak_centering else "SIMPLE"
+            print(f"SAVED [{quality}, {peak_status}]: {key_label} -> {relative_wav_path} (STEREO, {self.target_segment_samples} samples, RMS: {rms_level:.4f})")
             
         except Exception as e:
             print(f"Error saving key audio: {e}")
