@@ -22,3 +22,5 @@ recordings/metadata.csv
 #venv
 venv
 myenv
+backups/
+recordings

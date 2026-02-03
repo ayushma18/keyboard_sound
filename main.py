@@ -30,7 +30,7 @@ class ResearchApp:
         # Audio parameters
         self.fs = 44100  # Sample rate
         self.buffer_duration = 2.0  # seconds
-        self.segment_duration = 0.25  # seconds per key (increased for better capture)
+        self.segment_duration = 0.33  # seconds per key (matching dataset format)
         self.buffer_samples = int(self.fs * self.buffer_duration)
         self.segment_samples = int(self.fs * self.segment_duration)
         
@@ -71,7 +71,7 @@ class ResearchApp:
         self.output_dir = None
         self.metadata_file = None
         self.metadata_fields = ["timestamp", "key", "wav_file", "rms_level", "peak_level", "quality", 
-                               "mic_id", "keyboard_id", "session_id"]
+                               "mic_id", "keyboard_id", "session_id", "file_number"]
         
         # Configuration file for storing IDs
         self.config_file = "recording_config.json"
@@ -318,7 +318,7 @@ class ResearchApp:
         self.stop_button.pack(side=tk.LEFT, padx=5)
         
         # Info Label
-        info_text = "Instructions:\n1. Set Microphone ID and Keyboard ID\n2. Select audio device\n3. Calibrate background noise (stay quiet for 2 seconds)\n4. Test microphone\n5. Start recording and type!\n\nTip: Calibrate noise in your recording environment for best results."
+        info_text = "Instructions:\n1. Set Microphone ID and Keyboard ID\n2. Select audio device\n3. Calibrate background noise (stay quiet for 2 seconds)\n4. Test microphone\n5. Start recording and type 0-9, a-z!\n\nTip: Files will be organized in folders (0-9, a-z) with sequential numbering (0.wav, 1.wav, ...)"
         info_label = tk.Label(main_frame, text=info_text, 
                             font=("Arial", 9), fg="gray", justify=tk.LEFT)
         info_label.pack(pady=(10, 0))
@@ -887,11 +887,8 @@ class ResearchApp:
             except Exception:
                 k = str(key)
             
-            # Only record specific keys
-            is_valid_key = (
-                (k and len(k) == 1 and k.isprintable()) or 
-                k in ['Key.space', 'Key.enter', 'Key.backspace', 'Key.shift', 'Key.tab']
-            )
+            # Only record alphanumeric keys (0-9, a-z)
+            is_valid_key = (k and len(k) == 1 and (k.isalnum() or k.isdigit()))
             
             if is_valid_key:
                 # KEY DEBOUNCING: Check if this key was recently recorded
@@ -921,12 +918,33 @@ class ResearchApp:
                           f"Keyboard listening error: {e}")
             self.root.after(0, self.stop_recording)
 
+    def get_next_file_number(self, key_folder):
+        """Get the next sequential file number for a key folder"""
+        try:
+            existing_files = [f for f in os.listdir(key_folder) if f.endswith('.wav')]
+            if not existing_files:
+                return 0
+            # Extract numbers from filenames like "0.wav", "1.wav", etc.
+            numbers = []
+            for f in existing_files:
+                try:
+                    num = int(f.replace('.wav', ''))
+                    numbers.append(num)
+                except ValueError:
+                    continue
+            return max(numbers) + 1 if numbers else 0
+        except Exception:
+            return 0
+
     def save_key_audio(self, key_label):
-        """Extract audio segment from buffer and save as WAV with noise filtering in key-specific subfolders"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        """Extract audio segment from buffer and save as WAV with sequential numbering in character-specific subfolders"""
+        # Clean key label for filename and folder - convert to lowercase
+        clean_key = key_label.lower()
         
-        # Clean key label for filename and folder
-        clean_key = key_label.replace("Key.", "").replace(".", "_")
+        # Only allow alphanumeric characters (0-9, a-z)
+        if not (len(clean_key) == 1 and clean_key.isalnum()):
+            print(f"Skipping non-alphanumeric key: {key_label}")
+            return
         
         # Create key-specific subfolder
         key_folder = os.path.join(self.output_dir, clean_key)
@@ -936,11 +954,16 @@ class ResearchApp:
             print(f"Error creating key folder {key_folder}: {e}")
             return
         
-        wav_filename = f"{clean_key}_{timestamp}.wav"
+        # Get next sequential file number
+        file_number = self.get_next_file_number(key_folder)
+        
+        wav_filename = f"{file_number}.wav"
         wav_path = os.path.join(key_folder, wav_filename)
         
         # Update the relative path for metadata (includes subfolder)
         relative_wav_path = f"{clean_key}/{wav_filename}"
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         
         try:
             # Extract the most recent segment
@@ -954,7 +977,7 @@ class ResearchApp:
             # NOISE FILTERING: Check if signal is above threshold
             if rms_level < self.noise_threshold:
                 # Signal is too weak - likely just noise
-                print(f"REJECTED (noise): {key_label} - RMS: {rms_level:.6f} < threshold: {self.noise_threshold:.6f}")
+                print(f"REJECTED (noise): {key_label} -> {file_number}.wav - RMS: {rms_level:.6f} < threshold: {self.noise_threshold:.6f}")
                 self.keys_rejected += 1
                 self.root.after(0, self.update_stats)
                 return
@@ -1001,7 +1024,8 @@ class ResearchApp:
                     "quality": quality,
                     "mic_id": self.mic_id,
                     "keyboard_id": self.keyboard_id,
-                    "session_id": self.session_id
+                    "session_id": self.session_id,
+                    "file_number": file_number
                 })
             
             # Update stats
