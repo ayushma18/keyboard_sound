@@ -269,7 +269,7 @@ class DataSegmenterTab:
         pass
     
     def run_segmentation(self):
-        """Run the segmentation process in background - ROBUST ENERGY-BASED EXTRACTION."""
+        """Run HYBRID segmentation: CSV timestamps + energy validation."""
         try:
             # Create output directory
             output_base = os.path.join(os.path.dirname(self.current_session_path),
@@ -277,70 +277,105 @@ class DataSegmenterTab:
             os.makedirs(output_base, exist_ok=True)
             
             # Get parameters
-            segment_samples = int(self.segment_duration.get() * self.sample_rate)
-            pre_samples = int(self.pre_trigger.get() * self.sample_rate)
-            post_samples = int(self.post_trigger.get() * self.sample_rate)
+            keystroke_length = self.segment_duration.get()
+            begin_offset = self.pre_trigger.get()
             
-            # Metadata
+            keystroke_samples = int(keystroke_length * self.sample_rate)
+            offset_samples = int(begin_offset * self.sample_rate)
+            
+            print(f"\n=== Starting Hybrid Segmentation (CSV + Energy) ===")
+            print(f"Audio length: {len(self.audio_data)} samples ({len(self.audio_data)/self.sample_rate:.2f}s)")
+            print(f"Expected keystrokes: {len(self.keystroke_log)}")
+            print(f"Keystroke length: {keystroke_length}s, Begin offset: {begin_offset}s")
+            
+            # Convert to mono for analysis
+            if len(self.audio_data.shape) == 2:
+                mono_audio = np.mean(self.audio_data, axis=1)
+            else:
+                mono_audio = self.audio_data
+            
+            # Calculate fine-grained energy envelope for peak detection
+            print("Calculating energy envelope for peak detection...")
+            window_size = int(0.005 * self.sample_rate)  # 5ms windows for fine detail
+            hop_size = int(0.001 * self.sample_rate)  # 1ms hop for precision
+            if hop_size < 1:
+                hop_size = 1
+            
+            energy = []
+            for i in range(0, len(mono_audio) - window_size, hop_size):
+                window = mono_audio[i:i+window_size]
+                rms = np.sqrt(np.mean(window**2))
+                energy.append(rms)
+            
+            energy = np.array(energy)
+            energy_threshold = np.mean(energy) + np.std(energy)  # Mean + 1 std dev
+            
+            print(f"Energy: Max={np.max(energy):.4f}, Mean={np.mean(energy):.4f}, Threshold={energy_threshold:.4f}")
+            
+            # Process each keystroke from CSV
             metadata = []
             metadata_file = os.path.join(output_base, 'metadata.csv')
-            
-            total = len(self.keystroke_log)
-            processed = 0
             saved = 0
             skipped = 0
             
-            for idx, keystroke in enumerate(self.keystroke_log):
-                key = keystroke['key']
-                rel_time = keystroke['relative_time']
+            sorted_log = sorted(self.keystroke_log, key=lambda x: x['relative_time'])
+            
+            for idx, keystroke_info in enumerate(sorted_log):
+                key = keystroke_info['key']
+                rel_time = keystroke_info['relative_time']
+                timestamp = keystroke_info['timestamp']
                 
-                # Calculate sample position
-                center_sample = int(rel_time * self.sample_rate)
+                # Get approximate position from CSV
+                approx_sample = int(rel_time * self.sample_rate)
                 
-                # Extract segment with robust energy detection
-                if self.enable_peak_centering.get():
-                    segment = self.extract_keystroke_robust(center_sample, segment_samples)
-                else:
-                    # Simple extraction without peak detection
-                    start = max(0, center_sample - pre_samples)
-                    end = start + segment_samples
-                    if end > len(self.audio_data):
-                        end = len(self.audio_data)
-                        start = max(0, end - segment_samples)
-                    segment = self.audio_data[start:end].copy()
+                # Find actual peak within ±100ms window
+                search_window_ms = 0.1
+                search_radius_samples = int(search_window_ms * self.sample_rate)
+                search_start = max(0, approx_sample - search_radius_samples)
+                search_end = min(len(mono_audio), approx_sample + search_radius_samples)
                 
-                # Skip if segment is empty or too short
-                if segment is None or len(segment) < segment_samples // 2:
-                    print(f"Skipping {key} at {rel_time:.3f}s - extraction failed")
-                    skipped += 1
-                    processed += 1
-                    continue
+                # Convert to energy indices
+                search_start_energy = search_start // hop_size
+                search_end_energy = min(len(energy), search_end // hop_size)
                 
-                # Ensure correct length
-                if len(segment) < segment_samples:
-                    # Pad with silence
-                    padding = segment_samples - len(segment)
-                    if len(segment.shape) == 2:
-                        segment = np.pad(segment, ((0, padding), (0, 0)), mode='constant')
+                if search_end_energy > search_start_energy:
+                    # Find peak in energy within search window
+                    search_energy = energy[search_start_energy:search_end_energy]
+                    if len(search_energy) > 0 and np.max(search_energy) > energy_threshold * 0.3:
+                        peak_idx_in_window = np.argmax(search_energy)
+                        peak_energy_idx = search_start_energy + peak_idx_in_window
+                        peak_sample = peak_energy_idx * hop_size
                     else:
-                        segment = np.pad(segment, (0, padding), mode='constant')
-                elif len(segment) > segment_samples:
-                    # Trim
-                    segment = segment[:segment_samples]
+                        # No strong peak found, use CSV timestamp
+                        peak_sample = approx_sample
+                else:
+                    peak_sample = approx_sample
                 
-                # Apply filtering BEFORE saving (important for quality)
+                # Extract segment
+                begin = max(0, peak_sample - offset_samples)
+                end = min(len(mono_audio), peak_sample + keystroke_samples - offset_samples)
+                
+                segment = mono_audio[begin:end]
+                
+                # Always pad to target length (no skipping for short segments)
+                if len(segment) < keystroke_samples:
+                    # Pad with silence to reach target length
+                    padding_needed = keystroke_samples - len(segment)
+                    segment = np.pad(segment, (0, padding_needed), mode='constant')
+                    print(f"Padded {key} at {rel_time:.3f}s with {padding_needed} samples")
+                elif len(segment) > keystroke_samples:
+                    # Trim to exact length
+                    segment = segment[:keystroke_samples]
+                
+                # Apply filtering if enabled
                 if self.enable_filtering.get():
                     segment = self.audio.apply_bandpass_filter(segment,
                                                                self.filter_low.get(),
                                                                self.filter_high.get())
                 
-                # Quality check - skip if RMS is too low (likely noise/silence)
-                rms = np.sqrt(np.mean(segment**2))
-                if rms < 0.001:  # Threshold for noise
-                    print(f"Skipping {key} at {rel_time:.3f}s - too quiet (RMS: {rms:.6f})")
-                    skipped += 1
-                    processed += 1
-                    continue
+                # Convert back to stereo if original was stereo
+                if len(self.audio_data.shape) == 2:
+                    segment = np.column_stack([segment, segment])
                 
                 # Save segment
                 key_folder = os.path.join(output_base, key)
@@ -348,144 +383,138 @@ class DataSegmenterTab:
                 
                 existing_files = [f for f in os.listdir(key_folder) if f.endswith('.wav')]
                 file_num = len(existing_files)
-                filename = f"{file_num}.wav"  # Simple numbering like main_old.py
+                filename = f"{file_num}.wav"
                 filepath = os.path.join(key_folder, filename)
                 
                 if self.audio.save_audio(filepath, segment):
                     # Calculate stats
+                    rms = np.sqrt(np.mean(segment**2))
                     peak = np.max(np.abs(segment))
                     
                     metadata.append({
                         'key': key,
                         'filename': filename,
-                        'timestamp': keystroke['timestamp'],
+                        'timestamp': timestamp,
                         'relative_time': rel_time,
                         'rms': rms,
                         'peak': peak,
                         'samples': len(segment),
-                        'file_number': file_num
+                        'file_number': file_num,
+                        'detected_position': peak_sample / self.sample_rate
                     })
                     
                     saved += 1
-                    print(f"Saved {key}/{filename} - RMS: {rms:.4f}, Peak: {peak:.4f}")
-                
-                processed += 1
+                    print(f"Saved {key}/{filename} - CSV: {rel_time:.2f}s, Detected: {peak_sample/self.sample_rate:.2f}s, RMS: {rms:.4f}")
                 
                 # Update progress
-                progress = (processed / total) * 100
+                progress = ((idx + 1) / len(sorted_log)) * 100
                 self.parent.after(0, lambda p=progress: self.progress_var.set(p))
-                self.parent.after(0, lambda p=processed, t=total, s=saved: 
-                                self.progress_label.config(text=f"Processing: {p}/{t} (Saved: {s}, Skipped: {p-s})"))
+                self.parent.after(0, lambda i=idx+1, t=len(sorted_log), s=saved: 
+                                self.progress_label.config(text=f"Processing: {i}/{t} (Saved: {s})"))
             
             # Save metadata
             with open(metadata_file, 'w', newline='') as f:
                 writer = csv.DictWriter(f, fieldnames=['key', 'filename', 'timestamp',
                                                         'relative_time', 'rms', 'peak',
-                                                        'samples', 'file_number'])
+                                                        'samples', 'file_number', 'detected_position'])
                 writer.writeheader()
                 writer.writerows(metadata)
             
             # Show results
             results = f"""Segmentation Complete!
             
-Total keystrokes: {total}
+Total keystrokes: {len(sorted_log)}
 Successfully saved: {saved}
-Skipped (low quality): {skipped}
+Skipped: {skipped}
 Output directory: {output_base}
 
-Segment duration: {self.segment_duration.get():.3f}s
+Segment duration: {keystroke_length:.3f}s
+Begin offset: {begin_offset:.3f}s
 Sample rate: {self.sample_rate}Hz
-Samples per segment: {segment_samples}
 
-Peak centering: {'Enabled' if self.enable_peak_centering.get() else 'Disabled'}
 Filtering: {'Enabled' if self.enable_filtering.get() else 'Disabled'}
 Filter range: {self.filter_low.get()}-{self.filter_high.get()} Hz
 
-Success rate: {saved/total*100:.1f}%
+Success rate: {saved/len(sorted_log)*100:.1f}%
 """
             
             self.parent.after(0, lambda: self.results_text.insert(1.0, results))
             self.parent.after(0, lambda: self.process_btn.config(state=tk.NORMAL))
             self.parent.after(0, lambda: messagebox.showinfo("Success", 
-                                                             f"Segmentation complete!\nSaved {saved} segments\nSkipped {skipped} low-quality"))
+                                                             f"Segmentation complete!\nSaved {saved} segments"))
             
         except Exception as e:
-            selfkeystroke_robust(self, center_sample: int, target_samples: int) -> Optional[np.ndarray]:
-        """
-        Extract keystroke using robust energy-based peak detection.
-        Similar to the reference implementation but adapted for CSV timestamps.
-        """
-        try:
-            # Define search window around timestamp (±200ms)
-            search_window_ms = 0.2
-            search_radius = int(search_window_ms * self.sample_rate)
-            
-            search_start = max(0, center_sample - search_radius)
-            search_end = min(len(self.audio_data), center_sample + search_radius)
-            
-            if search_end - search_start < 100:  # Too short
-                return None
-            
-            search_audio = self.audio_data[search_start:search_end]
-            
-            # Convert to mono for analysis
-            if len(search_audio.shape) == 2:
-                mono = np.mean(search_audio, axis=1)
-            else:
-                mono = search_audio
-            
-            # Calculate energy envelope using RMS in sliding window
-            window_size = int(0.005 * self.sample_rate)  # 5ms windows
-            if window_size < 1:
-                window_size = 1
-            
-            hop_size = max(1, window_size // 2)
-            energy = []
-            
-            for i in range(0, len(mono) - window_size, hop_size):
-                window = mono[i:i+window_size]
-                rms = np.sqrt(np.mean(window**2))
-                energy.append(rms)
-            
-            if len(energy) == 0:
-                return None
-            
-            energy = np.array(energy)
-            
-            # Find peak energy
-            peak_energy_idx = np.argmax(energy)
-            peak_sample_in_search = peak_energy_idx * hop_size + window_size // 2
-            
-            # Convert to absolute position in audio
-            peak_absolute = search_start + peak_sample_in_search
-            
-            # Extract segment centered on peak
-            pre_trigger_samples = int(self.pre_trigger.get() * self.sample_rate)
-            
-            start = max(0, peak_absolute - pre_trigger_samples)
-            end = start + target_samples
-            
-            # Handle boundary cases
-            if end > len(self.audio_data):
-                end = len(self.audio_data)
-                start = max(0, end - target_samples)
-            
-            segment = self.audio_data[start:end].copy()
-            
-            # Validate segment
-            if len(segment) < target_samples // 4:  # Less than 25% of target
-                return None
-            
-            return segment
-            
-        except Exception as e:
-            print(f"Peak detection error: {e}")
-            return None
+            error_msg = f"Segmentation error: {str(e)}"
+            print(error_msg)
+            import traceback
+            traceback.print_exc()
+            self.parent.after(0, lambda: self.progress_label.config(text=error_msg))
+            self.parent.after(0, lambda: self.process_btn.config(state=tk.NORMAL))
+            self.parent.after(0, lambda: messagebox.showerror("Error", error_msg))
     
-    def extract_peak_centered(self, center_sample: int, target_samples: int,
-                             pre_samples: int, post_samples: int) -> np.ndarray:
-        """Legacy method - kept for compatibility."""
-        return self.extract_keystroke_robust(center_sample, target_samples)ples)
-        end = min(len(self.audio_data), peak_pos + post_samples)
+    def separate_keystrokes(self, energy, threshold, recording, keystroke_length, begin_offset, hop_size):
+        """
+        Separate keystrokes based on energy threshold - EXACTLY like reference implementation.
+        When energy exceeds threshold, extract FIXED-LENGTH keystroke and skip past it.
+        Does NOT wait for energy to drop - just finds starts and extracts fixed duration.
+        """
+        keystrokes = []
+        i = 0
         
-        return self.audio_data[start:end]
+        rate = self.sample_rate
+        keystroke_samples = int(keystroke_length * rate)
+        offset_samples = int(begin_offset * rate)
+        
+        while i < len(energy):
+            if energy[i] > threshold:
+                # Found keystroke start - extract fixed-length segment
+                # Convert energy index to sample position
+                begin_sample = i * hop_size
+                begin = max(0, begin_sample - offset_samples)
+                end = min(len(recording), begin_sample + keystroke_samples)
+                
+                if end - begin > 100:  # Minimum validation
+                    keystroke_audio = recording[begin:end]
+                    keystrokes.append((keystroke_audio, begin_sample))
+                
+                # Skip to END of this keystroke to avoid re-detecting it
+                # Skip in ENERGY space (not sample space)
+                i += int(keystroke_samples / hop_size)
+                continue
+            
+            i += 1
+        
+        return keystrokes
+    
+    def find_threshold(self, energy, init_threshold, recording, step, target_keystrokes,
+                      keystroke_length, begin_offset, hop_size):
+        """
+        Find optimal threshold that produces target number of keystrokes (like reference).
+        """
+        cur_threshold = init_threshold
+        keystrokes = self.separate_keystrokes(energy, init_threshold, recording, 
+                                              keystroke_length, begin_offset, hop_size)
+        
+        iteration = 0
+        max_iterations = 1000
+        
+        while len(keystrokes) != target_keystrokes and iteration < max_iterations:
+            if len(keystrokes) > target_keystrokes:
+                # Too many, raise threshold
+                cur_threshold += step
+            else:
+                # Too few, lower threshold
+                cur_threshold -= step
+            
+            step = step * 0.99  # Decay step size
+            keystrokes = self.separate_keystrokes(energy, cur_threshold, recording,
+                                                  keystroke_length, begin_offset, hop_size)
+            
+            if iteration % 10 == 0:
+                print(f'Iteration {iteration}: Count={len(keystrokes)}, Threshold={cur_threshold:.4f}, Step={step:.6f}')
+            
+            iteration += 1
+        
+        print(f'Final: Keystroke count={len(keystrokes)}, Threshold={cur_threshold:.4f}')
+        
+        return (keystrokes, cur_threshold)

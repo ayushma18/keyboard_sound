@@ -293,9 +293,12 @@ class DataCollectorTab:
         if self.keystroke_logger:
             self.keystroke_logger.stop()
         
-        # Wait for recording thread
+        # Wait for recording thread to finish current chunk (up to 5 seconds)
         if self.recording_thread:
-            self.recording_thread.join(timeout=2.0)
+            print("Waiting for recording thread to finish...")
+            self.recording_thread.join(timeout=5.0)
+            if self.recording_thread.is_alive():
+                print("Warning: Recording thread did not finish in time")
         
         # Save audio
         self.status_label.config(text="Status: Saving...", fg="orange")
@@ -312,10 +315,10 @@ class DataCollectorTab:
         messagebox.showinfo("Success", f"Session saved to:\n{self.current_session}")
     
     def record_continuous(self):
-        """Record audio continuously in chunks - MATCHES main_old.py."""
+        """Record audio continuously in chunks - FIXED to capture all audio."""
         chunk_duration = 1.0  # Record in 1-second chunks
         
-        # Get input device info and adjust if needed (like main_old.py)
+        # Get input device info and adjust if needed
         try:
             input_dev = self.config.get('input_device')
             if input_dev is not None:
@@ -336,15 +339,34 @@ class DataCollectorTab:
         except Exception as e:
             print(f"Warning: Could not detect device settings: {e}")
         
-        while self.is_recording:
-            try:
-                chunk = self.audio.record_stream(chunk_duration)
-                self.recorded_audio.append(chunk)
-            except Exception as e:
-                print(f"Recording error: {e}")
-                self.parent.after(0, lambda: messagebox.showerror("Recording Error", 
-                    f"Failed to record: {e}\n\nMake sure your microphone is not in use by another application."))
-                break
+        import sounddevice as sd
+        
+        # Use streaming to avoid blocking and lost chunks
+        chunk_samples = int(chunk_duration * self.audio.sample_rate)
+        
+        try:
+            with sd.InputStream(samplerate=self.audio.sample_rate,
+                               channels=self.audio.channels,
+                               dtype='float32') as stream:
+                print(f"Recording stream started: {self.audio.sample_rate}Hz, {self.audio.channels}ch")
+                
+                while self.is_recording:
+                    # Read chunk (blocking but with timeout)
+                    chunk, overflowed = stream.read(chunk_samples)
+                    
+                    if overflowed:
+                        print("Warning: Audio buffer overflow - some samples may be lost")
+                    
+                    self.recorded_audio.append(chunk)
+                    
+                print(f"Recording stopped. Total chunks: {len(self.recorded_audio)}")
+                
+        except Exception as e:
+            print(f"Recording error: {e}")
+            import traceback
+            traceback.print_exc()
+            self.parent.after(0, lambda: messagebox.showerror("Recording Error", 
+                f"Failed to record: {e}\n\nMake sure your microphone is not in use by another application."))
     
     def on_keystroke(self, key: str, timestamp: float):
         """Handle keystroke event."""
@@ -382,15 +404,18 @@ class DataCollectorTab:
             
             # Save session info
             info_path = os.path.join(self.current_session, 'session_info.txt')
+            duration_seconds = len(full_audio) / self.audio.sample_rate if self.recorded_audio else 0
             with open(info_path, 'w') as f:
                 f.write(f"Session: {self.session_name_var.get()}\n")
                 f.write(f"Microphone: {self.mic_id_var.get()}\n")
                 f.write(f"Keyboard: {self.kb_id_var.get()}\n")
                 f.write(f"Start Time: {self.start_time.isoformat()}\n")
-                f.write(f"Duration: {len(self.recorded_audio)} seconds\n")
+                f.write(f"Duration: {duration_seconds:.2f} seconds ({len(self.recorded_audio)} chunks)\n")
                 f.write(f"Keystrokes: {len(self.keystroke_log)}\n")
-                f.write(f"Sample Rate: {self.config.get('sample_rate')}\n")
-                f.write(f"Channels: {self.config.get('channels')}\n")
+                f.write(f"Sample Rate: {self.audio.sample_rate}\n")
+                f.write(f"Channels: {self.audio.channels}\n")
+            
+            print(f"Session saved: {duration_seconds:.2f}s audio, {len(self.keystroke_log)} keystrokes")
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save session: {e}")

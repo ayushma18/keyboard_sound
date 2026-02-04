@@ -210,9 +210,23 @@ Modular architecture with integrated tabs for efficiency.
 
 def main():
     """Main entry point."""
-    root = tk.Tk()
-    app = KeyboardAcousticApp(root)
-    root.mainloop()
+    try:
+        print("Creating Tkinter root window...")
+        root = tk.Tk()
+        print("Root window created successfully")
+        print("Initializing KeyboardAcousticApp...")
+        app = KeyboardAcousticApp(root)
+        print("App initialized successfully")
+        print("Starting mainloop...")
+        root.mainloop()
+        print("Mainloop ended")
+    except Exception as e:
+        print(f"ERROR: Application failed to start!")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {e}")
+        import traceback
+        traceback.print_exc()
+        input("Press Enter to exit...")
 
 
 if __name__ == "__main__":
