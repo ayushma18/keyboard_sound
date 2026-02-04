@@ -269,7 +269,7 @@ class DataSegmenterTab:
         pass
     
     def run_segmentation(self):
-        """Run the segmentation process in background."""
+        """Run the segmentation process in background - ROBUST ENERGY-BASED EXTRACTION."""
         try:
             # Create output directory
             output_base = os.path.join(os.path.dirname(self.current_session_path),
@@ -288,6 +288,7 @@ class DataSegmenterTab:
             total = len(self.keystroke_log)
             processed = 0
             saved = 0
+            skipped = 0
             
             for idx, keystroke in enumerate(self.keystroke_log):
                 key = keystroke['key']
@@ -296,18 +297,28 @@ class DataSegmenterTab:
                 # Calculate sample position
                 center_sample = int(rel_time * self.sample_rate)
                 
-                # Extract segment
+                # Extract segment with robust energy detection
                 if self.enable_peak_centering.get():
-                    segment = self.extract_peak_centered(center_sample, segment_samples,
-                                                        pre_samples, post_samples)
+                    segment = self.extract_keystroke_robust(center_sample, segment_samples)
                 else:
+                    # Simple extraction without peak detection
                     start = max(0, center_sample - pre_samples)
-                    end = min(len(self.audio_data), center_sample + post_samples)
-                    segment = self.audio_data[start:end]
+                    end = start + segment_samples
+                    if end > len(self.audio_data):
+                        end = len(self.audio_data)
+                        start = max(0, end - segment_samples)
+                    segment = self.audio_data[start:end].copy()
+                
+                # Skip if segment is empty or too short
+                if segment is None or len(segment) < segment_samples // 2:
+                    print(f"Skipping {key} at {rel_time:.3f}s - extraction failed")
+                    skipped += 1
+                    processed += 1
+                    continue
                 
                 # Ensure correct length
                 if len(segment) < segment_samples:
-                    # Pad
+                    # Pad with silence
                     padding = segment_samples - len(segment)
                     if len(segment.shape) == 2:
                         segment = np.pad(segment, ((0, padding), (0, 0)), mode='constant')
@@ -317,23 +328,31 @@ class DataSegmenterTab:
                     # Trim
                     segment = segment[:segment_samples]
                 
-                # Apply filtering
+                # Apply filtering BEFORE saving (important for quality)
                 if self.enable_filtering.get():
                     segment = self.audio.apply_bandpass_filter(segment,
                                                                self.filter_low.get(),
                                                                self.filter_high.get())
                 
+                # Quality check - skip if RMS is too low (likely noise/silence)
+                rms = np.sqrt(np.mean(segment**2))
+                if rms < 0.001:  # Threshold for noise
+                    print(f"Skipping {key} at {rel_time:.3f}s - too quiet (RMS: {rms:.6f})")
+                    skipped += 1
+                    processed += 1
+                    continue
+                
                 # Save segment
                 key_folder = os.path.join(output_base, key)
                 os.makedirs(key_folder, exist_ok=True)
                 
-                file_num = len([f for f in os.listdir(key_folder) if f.endswith('.wav')]) + 1
-                filename = f"{key}_{file_num:04d}.wav"
+                existing_files = [f for f in os.listdir(key_folder) if f.endswith('.wav')]
+                file_num = len(existing_files)
+                filename = f"{file_num}.wav"  # Simple numbering like main_old.py
                 filepath = os.path.join(key_folder, filename)
                 
                 if self.audio.save_audio(filepath, segment):
                     # Calculate stats
-                    rms = self.audio.get_audio_level(segment)
                     peak = np.max(np.abs(segment))
                     
                     metadata.append({
@@ -348,14 +367,15 @@ class DataSegmenterTab:
                     })
                     
                     saved += 1
+                    print(f"Saved {key}/{filename} - RMS: {rms:.4f}, Peak: {peak:.4f}")
                 
                 processed += 1
                 
                 # Update progress
                 progress = (processed / total) * 100
                 self.parent.after(0, lambda p=progress: self.progress_var.set(p))
-                self.parent.after(0, lambda p=processed, t=total: 
-                                self.progress_label.config(text=f"Processing: {p}/{t}"))
+                self.parent.after(0, lambda p=processed, t=total, s=saved: 
+                                self.progress_label.config(text=f"Processing: {p}/{t} (Saved: {s}, Skipped: {p-s})"))
             
             # Save metadata
             with open(metadata_file, 'w', newline='') as f:
@@ -370,6 +390,7 @@ class DataSegmenterTab:
             
 Total keystrokes: {total}
 Successfully saved: {saved}
+Skipped (low quality): {skipped}
 Output directory: {output_base}
 
 Segment duration: {self.segment_duration.get():.3f}s
@@ -379,37 +400,92 @@ Samples per segment: {segment_samples}
 Peak centering: {'Enabled' if self.enable_peak_centering.get() else 'Disabled'}
 Filtering: {'Enabled' if self.enable_filtering.get() else 'Disabled'}
 Filter range: {self.filter_low.get()}-{self.filter_high.get()} Hz
+
+Success rate: {saved/total*100:.1f}%
 """
             
             self.parent.after(0, lambda: self.results_text.insert(1.0, results))
             self.parent.after(0, lambda: self.process_btn.config(state=tk.NORMAL))
             self.parent.after(0, lambda: messagebox.showinfo("Success", 
-                                                             f"Segmentation complete!\nSaved {saved} segments"))
+                                                             f"Segmentation complete!\nSaved {saved} segments\nSkipped {skipped} low-quality"))
             
         except Exception as e:
-            self.parent.after(0, lambda: messagebox.showerror("Error", f"Segmentation failed: {e}"))
-            self.parent.after(0, lambda: self.process_btn.config(state=tk.NORMAL))
+            selfkeystroke_robust(self, center_sample: int, target_samples: int) -> Optional[np.ndarray]:
+        """
+        Extract keystroke using robust energy-based peak detection.
+        Similar to the reference implementation but adapted for CSV timestamps.
+        """
+        try:
+            # Define search window around timestamp (±200ms)
+            search_window_ms = 0.2
+            search_radius = int(search_window_ms * self.sample_rate)
+            
+            search_start = max(0, center_sample - search_radius)
+            search_end = min(len(self.audio_data), center_sample + search_radius)
+            
+            if search_end - search_start < 100:  # Too short
+                return None
+            
+            search_audio = self.audio_data[search_start:search_end]
+            
+            # Convert to mono for analysis
+            if len(search_audio.shape) == 2:
+                mono = np.mean(search_audio, axis=1)
+            else:
+                mono = search_audio
+            
+            # Calculate energy envelope using RMS in sliding window
+            window_size = int(0.005 * self.sample_rate)  # 5ms windows
+            if window_size < 1:
+                window_size = 1
+            
+            hop_size = max(1, window_size // 2)
+            energy = []
+            
+            for i in range(0, len(mono) - window_size, hop_size):
+                window = mono[i:i+window_size]
+                rms = np.sqrt(np.mean(window**2))
+                energy.append(rms)
+            
+            if len(energy) == 0:
+                return None
+            
+            energy = np.array(energy)
+            
+            # Find peak energy
+            peak_energy_idx = np.argmax(energy)
+            peak_sample_in_search = peak_energy_idx * hop_size + window_size // 2
+            
+            # Convert to absolute position in audio
+            peak_absolute = search_start + peak_sample_in_search
+            
+            # Extract segment centered on peak
+            pre_trigger_samples = int(self.pre_trigger.get() * self.sample_rate)
+            
+            start = max(0, peak_absolute - pre_trigger_samples)
+            end = start + target_samples
+            
+            # Handle boundary cases
+            if end > len(self.audio_data):
+                end = len(self.audio_data)
+                start = max(0, end - target_samples)
+            
+            segment = self.audio_data[start:end].copy()
+            
+            # Validate segment
+            if len(segment) < target_samples // 4:  # Less than 25% of target
+                return None
+            
+            return segment
+            
+        except Exception as e:
+            print(f"Peak detection error: {e}")
+            return None
     
     def extract_peak_centered(self, center_sample: int, target_samples: int,
                              pre_samples: int, post_samples: int) -> np.ndarray:
-        """Extract segment with peak centering."""
-        # Define search window
-        search_start = max(0, center_sample - pre_samples - 2000)
-        search_end = min(len(self.audio_data), center_sample + post_samples + 2000)
-        search_window = self.audio_data[search_start:search_end]
-        
-        # Find peak in window
-        peak_idx = self.audio.detect_peak(search_window)
-        
-        if peak_idx is not None:
-            # Adjust to full audio position
-            peak_pos = search_start + peak_idx
-        else:
-            # Fallback to center
-            peak_pos = center_sample
-        
-        # Extract around peak
-        start = max(0, peak_pos - pre_samples)
+        """Legacy method - kept for compatibility."""
+        return self.extract_keystroke_robust(center_sample, target_samples)ples)
         end = min(len(self.audio_data), peak_pos + post_samples)
         
         return self.audio_data[start:end]
