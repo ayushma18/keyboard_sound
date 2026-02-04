@@ -15,10 +15,9 @@ import json
 from scipy import signal
 
 class DataCleanupApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Keystroke Audio Data Cleanup Tool")
-        self.root.geometry("1400x900")
+    def __init__(self, parent):
+        self.root = parent  # Parent frame, not root window
+        self.parent = parent
         
         # Data storage
         self.base_dir = "recordings"

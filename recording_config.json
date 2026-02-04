@@ -1,4 +1,6 @@
 {
-  "mic_id": "dji2",
-  "keyboard_id": "kumara"
+    "mic_id": "dji2",
+    "keyboard_id": "kumara",
+    "input_device": 2,
+    "output_device": 5
 }

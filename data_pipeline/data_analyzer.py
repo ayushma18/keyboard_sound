@@ -15,10 +15,9 @@ import librosa.display
 import sounddevice as sd
 
 class AudioAnalyzer:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Keyboard Audio Analyzer - Waveform & Spectrogram Viewer")
-        self.root.geometry("1400x900")
+    def __init__(self, parent):
+        self.root = parent  # Parent frame, not root window
+        self.parent = parent
         
         # Current audio data
         self.current_file = None
