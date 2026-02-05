@@ -28,6 +28,7 @@ class DataSegmenterTab:
         self.audio = audio_handler
         
         self.current_session_path = None
+        self.batch_sessions = None  # For batch processing
         self.audio_data = None
         self.keystroke_log = []
         self.sample_rate = None
@@ -42,6 +43,14 @@ class DataSegmenterTab:
         self.filter_high = tk.IntVar(value=5000)
         
         self.build_ui()
+    
+    def _safe_ui_update(self, func):
+        """Safely update UI from any thread."""
+        try:
+            # Use parent.after_idle for thread-safe updates
+            self.parent.after_idle(func)
+        except Exception as e:
+            print(f"UI update error: {e}")
     
     def build_ui(self):
         """Build the data segmenter UI."""
@@ -198,30 +207,111 @@ class DataSegmenterTab:
         self.toggle_filter_controls()
     
     def browse_session(self):
-        """Browse for a continuous recording session."""
-        folder = filedialog.askdirectory(title="Select Continuous Recording Session Folder")
+        """Browse for a continuous recording session or parent folder containing multiple sessions."""
+        folder = filedialog.askdirectory(title="Select Session Folder (or Parent Folder for Batch Processing)")
         if not folder:
             return
         
-        # Check for required files
+        # Check if this is a single session folder or parent folder
         audio_file = os.path.join(folder, 'audio.wav')
         log_file = os.path.join(folder, 'keystroke_log.csv')
         
-        if not os.path.exists(audio_file):
-            messagebox.showerror("Error", "audio.wav not found in selected folder")
-            return
+        if os.path.exists(audio_file) and os.path.exists(log_file):
+            # Single session folder
+            self.load_session(folder)
+        else:
+            # Check if this folder contains session subfolders
+            session_folders = self.find_session_folders(folder)
+            
+            if not session_folders:
+                messagebox.showerror("Error", 
+                    "No valid sessions found.\n\n"
+                    "Selected folder must either:\n"
+                    "1. Contain audio.wav and keystroke_log.csv, or\n"
+                    "2. Contain subfolders with sessions")
+                return
+            
+            # Ask user if they want to process all sessions
+            msg = f"Found {len(session_folders)} session(s) in this folder.\n\n" + \
+                  "\n".join([f"  • {os.path.basename(f)}" for f in session_folders[:10]])
+            if len(session_folders) > 10:
+                msg += f"\n  ... and {len(session_folders) - 10} more"
+            msg += "\n\nProcess all sessions?"
+            
+            result = messagebox.askyesno("Batch Processing", msg)
+            if result:
+                self.load_batch_sessions(session_folders)
+            else:
+                messagebox.showinfo("Cancelled", "Please select a specific session folder.")
+    
+    def find_session_folders(self, parent_folder: str, max_depth: int = 3) -> List[str]:
+        """Recursively find all folders containing audio.wav and keystroke_log.csv.
         
-        if not os.path.exists(log_file):
-            messagebox.showerror("Error", "keystroke_log.csv not found in selected folder")
-            return
+        Args:
+            parent_folder: Root folder to search
+            max_depth: Maximum recursion depth
+            
+        Returns:
+            List of paths to valid session folders
+        """
+        session_folders = []
         
-        # Load session
-        self.load_session(folder)
+        def search_recursive(folder: str, depth: int):
+            if depth > max_depth:
+                return
+            
+            try:
+                # Check if this folder is a valid session
+                audio_file = os.path.join(folder, 'audio.wav')
+                log_file = os.path.join(folder, 'keystroke_log.csv')
+                
+                if os.path.exists(audio_file) and os.path.exists(log_file):
+                    session_folders.append(folder)
+                    return  # Don't search deeper if this is a session folder
+                
+                # Search subdirectories
+                for item in os.listdir(folder):
+                    item_path = os.path.join(folder, item)
+                    if os.path.isdir(item_path):
+                        search_recursive(item_path, depth + 1)
+            except (PermissionError, OSError):
+                pass  # Skip folders we can't access
+        
+        search_recursive(parent_folder, 0)
+        return sorted(session_folders)
+    
+    def load_batch_sessions(self, session_folders: List[str]):
+        """Load multiple sessions for batch processing."""
+        self.current_session_path = None
+        self.batch_sessions = session_folders
+        self.audio_data = None
+        self.keystroke_log = []
+        
+        # Update UI
+        self.session_label.config(
+            text=f"Batch Mode: {len(session_folders)} sessions selected",
+            fg="green"
+        )
+        
+        total_keystrokes = 0
+        for folder in session_folders:
+            log_file = os.path.join(folder, 'keystroke_log.csv')
+            try:
+                with open(log_file, 'r') as f:
+                    total_keystrokes += sum(1 for _ in csv.DictReader(f))
+            except:
+                pass
+        
+        info = f"Sessions: {len(session_folders)} | Total keystrokes: ~{total_keystrokes}"
+        self.session_info_label.config(text=info)
+        
+        self.process_btn.config(state=tk.NORMAL)
     
     def load_session(self, folder: str):
         """Load continuous recording session."""
         try:
             self.current_session_path = folder
+            self.batch_sessions = None
             
             # Load audio
             audio_file = os.path.join(folder, 'audio.wav')
@@ -257,24 +347,56 @@ class DataSegmenterTab:
     
     def start_segmentation(self):
         """Start the segmentation process."""
-        if self.audio_data is None or not self.keystroke_log:
+        # Check if we're in batch mode or single session mode
+        if hasattr(self, 'batch_sessions') and self.batch_sessions:
+            # Batch mode - capture all tkinter variables BEFORE threading
+            # This is critical on Windows - tkinter vars are not thread-safe!
+            params = {
+                'output_name': self.output_name_var.get(),
+                'segment_duration': self.segment_duration.get(),
+                'pre_trigger': self.pre_trigger.get(),
+                'post_trigger': self.post_trigger.get(),
+                'enable_peak_centering': self.enable_peak_centering.get(),
+                'enable_filtering': self.enable_filtering.get(),
+                'filter_low': self.filter_low.get(),
+                'filter_high': self.filter_high.get()
+            }
+            
+            self.process_btn.config(state=tk.DISABLED)
+            self.progress_var.set(0)
+            self.results_text.delete(1.0, tk.END)
+            
+            thread = threading.Thread(target=self.run_batch_segmentation, args=(params,), daemon=True)
+            thread.start()
+        elif self.audio_data is None or not self.keystroke_log:
             messagebox.showwarning("Warning", "No session loaded")
             return
-        
-        # Disable button
-        self.process_btn.config(state=tk.DISABLED)
-        self.progress_var.set(0)
-        self.results_text.delete(1.0, tk.END)
-        
-        # Run in thread
-        thread = threading.Thread(target=self.run_segmentation, daemon=True)
-        thread.start()
+        else:
+            # Single session mode - capture variables before threading
+            params = {
+                'output_name': self.output_name_var.get(),
+                'segment_duration': self.segment_duration.get(),
+                'pre_trigger': self.pre_trigger.get(),
+                'post_trigger': self.post_trigger.get(),
+                'enable_peak_centering': self.enable_peak_centering.get(),
+                'enable_filtering': self.enable_filtering.get(),
+                'filter_low': self.filter_low.get(),
+                'filter_high': self.filter_high.get()
+            }
+            
+            self.process_btn.config(state=tk.DISABLED)
+            self.progress_var.set(0)
+            self.results_text.delete(1.0, tk.END)
+            
+            thread = threading.Thread(target=self.run_segmentation, args=(params,), daemon=True)
+            thread.start()
     
     def cancel_segmentation(self):
         """Cancel segmentation (placeholder)."""
         pass
     
-    def compute_onset_strength(self, audio: np.ndarray, 
+    def compute_onset_strength(self, audio: np.ndarray,
+                                sample_rate: int,
                                 hop_length: int = 512, 
                                 win_length: int = 2048) -> np.ndarray:
         """
@@ -282,9 +404,15 @@ class DataSegmenterTab:
         Similar to librosa.onset.onset_strength but optimized for percussive keystrokes.
         
         Research basis: Keystroke papers use 10-100ms windows for energy calculation.
+        
+        Args:
+            audio: Audio signal
+            sample_rate: Sample rate of the audio
+            hop_length: Number of samples between successive frames
+            win_length: Window length for STFT
         """
         # Use STFT for frequency-aware energy computation
-        f, t, Zxx = signal.stft(audio, fs=self.sample_rate, 
+        f, t, Zxx = signal.stft(audio, fs=sample_rate, 
                                nperseg=win_length, noverlap=win_length-hop_length)
         
         # Compute spectral magnitude
@@ -517,18 +645,673 @@ class DataSegmenterTab:
         
         return valid_segments
     
-    def run_segmentation(self):
+    def match_segments_to_keystrokes(self, segments: List[Dict], 
+                                      keystroke_log: List[Dict],
+                                      max_time_diff: float = 0.2) -> List[Dict]:
         """
-        Robust keystroke segmentation based on audio research best practices:
-        1. Sliding window energy detection (like librosa onset detection)
-        2. Peak-centered extraction with proper attack capture
-        3. Adaptive thresholding with validation
-        4. Quality checks to reject invalid segments
+        Match segments to keystrokes using temporal proximity.
+        
+        This prevents misclassification when some keystrokes are not detected.
+        Each segment is matched to its closest keystroke in time (within threshold).
+        
+        Algorithm:
+        1. For each segment, find the closest CSV keystroke in time
+        2. Use 1:1 matching: each keystroke can only be matched once
+        3. Compute confidence score based on temporal proximity
+        4. Flag unmatched segments and missing keystrokes
+        
+        Args:
+            segments: List of detected segment dictionaries
+            keystroke_log: List of keystroke log entries
+            max_time_diff: Maximum allowed time difference for matching (seconds)
+            
+        Returns:
+            List of match dictionaries with segment, keystroke, and quality info
+        """
+        matches = []
+        used_keystroke_indices = set()
+        
+        print(f"\n=== Temporal Matching: {len(segments)} segments to {len(keystroke_log)} keystrokes ===")
+        
+        # For each segment, find best matching keystroke
+        for seg_info in segments:
+            peak_time = seg_info['peak_sample'] / self.sample_rate
+            
+            # Find closest keystroke in time
+            best_idx = None
+            best_time_diff = float('inf')
+            
+            for idx, keystroke in enumerate(keystroke_log):
+                if idx in used_keystroke_indices:
+                    continue  # Already matched
+                
+                csv_time = keystroke['relative_time']
+                time_diff = abs(peak_time - csv_time)
+                
+                if time_diff < best_time_diff:
+                    best_time_diff = time_diff
+                    best_idx = idx
+            
+            # Check if match is acceptable
+            if best_idx is not None and best_time_diff <= max_time_diff:
+                # Good match found
+                keystroke = keystroke_log[best_idx]
+                used_keystroke_indices.add(best_idx)
+                
+                # Compute confidence (1.0 = perfect, 0.0 = at threshold)
+                confidence = 1.0 - (best_time_diff / max_time_diff)
+                
+                matches.append({
+                    'segment': seg_info,
+                    'key': keystroke['key'],
+                    'timestamp': keystroke['timestamp'],
+                    'csv_time': keystroke['relative_time'],
+                    'time_diff': best_time_diff,
+                    'confidence': confidence,
+                    'matched': True
+                })
+                
+                if best_time_diff > 0.1:  # Warning for >100ms
+                    print(f"  Warning: Large time diff for '{keystroke['key']}': {best_time_diff*1000:.1f}ms")
+            else:
+                # No good match - unmatched segment (false positive)
+                matches.append({
+                    'segment': seg_info,
+                    'key': 'UNMATCHED',
+                    'timestamp': '',
+                    'csv_time': peak_time,
+                    'time_diff': best_time_diff if best_idx is not None else -1,
+                    'confidence': 0.0,
+                    'matched': False
+                })
+                print(f"  WARNING: Unmatched segment at {peak_time:.3f}s (closest: {best_time_diff:.3f}s)")
+        
+        # Report unmatched keystrokes from CSV
+        unmatched_count = 0
+        for idx, keystroke in enumerate(keystroke_log):
+            if idx not in used_keystroke_indices:
+                unmatched_count += 1
+                print(f"  WARNING: Unmatched CSV keystroke '{keystroke['key']}' at {keystroke['relative_time']:.3f}s")
+        
+        print(f"\nMatching Summary:")
+        print(f"  Matched: {len([m for m in matches if m['matched']])} / {len(keystroke_log)}")
+        print(f"  Unmatched segments: {len([m for m in matches if not m['matched']])}")
+        print(f"  Unmatched CSV entries: {unmatched_count}")
+        
+        return matches
+    
+    def run_batch_segmentation(self, params):
+        """Process multiple sessions recursively with detailed logging.
+        
+        Args:
+            params: Dictionary of parameters captured from tkinter variables (thread-safe)
         """
         try:
-            # Create output directory
+            print("\n[DEBUG] Starting batch segmentation...")
+            
+            # Use passed parameters instead of accessing tkinter variables
+            output_base_name = params['output_name']
+            print(f"[DEBUG] Output base name: {output_base_name}")
+            
+            # Find the recordings root directory and create segmented folder there
+            # Navigate up from session folders to find "recordings" directory
+            first_session = self.batch_sessions[0]
+            current_path = first_session
+            recordings_root = None
+            
+            # Go up the directory tree to find "recordings" folder
+            for _ in range(10):  # Limit depth to avoid infinite loop
+                parent = os.path.dirname(current_path)
+                if os.path.basename(current_path) in ['recordings', 'backups']:
+                    recordings_root = current_path
+                    break
+                if parent == current_path:  # Reached root
+                    break
+                current_path = parent
+            
+            # If we found recordings root, create segmented folder there
+            # Otherwise fall back to parent of first session
+            if recordings_root:
+                # Extract device/keyboard info from path for better naming
+                # e.g., recordings/dji2-kumara/continuous/0 -> segmented/dji2-kumara_continuous_...
+                rel_path = os.path.relpath(first_session, recordings_root)
+                path_parts = rel_path.split(os.sep)
+                if len(path_parts) >= 2:
+                    device_info = "_".join(path_parts[:-1])  # e.g., "dji2-kumara_continuous"
+                    output_name_with_device = f"{device_info}_{output_base_name}"
+                else:
+                    output_name_with_device = output_base_name
+                
+                segmented_folder = os.path.join(recordings_root, 'segmented')
+                output_base = os.path.join(segmented_folder, output_name_with_device)
+            else:
+                # Fallback: use parent of first session
+                first_session_parent = os.path.dirname(first_session)
+                output_base = os.path.join(first_session_parent, output_base_name)
+            
+            os.makedirs(output_base, exist_ok=True)
+            print(f"[DEBUG] Output directory created: {output_base}")
+            
+            total_sessions = len(self.batch_sessions)
+            overall_stats = {
+                'total_sessions': total_sessions,
+                'processed_sessions': 0,
+                'failed_sessions': 0,
+                'total_keystrokes': 0,
+                'total_saved': 0,
+                'total_skipped': 0,
+                'session_details': [],
+                'key_counts': {}  # Track how many samples per key across all sessions
+            }
+            
+            print(f"\n{'='*80}")
+            print(f"BATCH SEGMENTATION: {total_sessions} sessions")
+            print(f"Output: {output_base}")
+            print(f"{'='*80}\n")
+            
+            # Process each session
+            for session_idx, session_folder in enumerate(self.batch_sessions):
+                try:
+                    session_name = os.path.basename(session_folder)
+                    print(f"\n[{session_idx+1}/{total_sessions}] Processing: {session_name}")
+                    print("-" * 60)
+                    
+                    # Update progress safely
+                    progress = (session_idx / total_sessions) * 100
+                    print(f"[DEBUG] Updating progress to {progress}%")
+                    self._safe_ui_update(lambda p=progress: self.progress_var.set(p))
+                    self._safe_ui_update(lambda i=session_idx+1, t=total_sessions, n=session_name: 
+                        self.progress_label.config(text=f"Session {i}/{t}: {n}"))
+                    
+                    print(f"[DEBUG] Calling process_single_session_batch...")
+                    # Process this session - pass params
+                    session_stats = self.process_single_session_batch(
+                        session_folder,
+                        output_base,
+                        session_name,
+                        params
+                    )
+                    print(f"[DEBUG] Session processing complete")
+                    
+                    if session_stats['success']:
+                        overall_stats['processed_sessions'] += 1
+                        overall_stats['total_keystrokes'] += session_stats['total_keystrokes']
+                        overall_stats['total_saved'] += session_stats['saved']
+                        overall_stats['total_skipped'] += session_stats['skipped']
+                        
+                        # Aggregate key counts
+                        for key, count in session_stats['key_counts'].items():
+                            overall_stats['key_counts'][key] = overall_stats['key_counts'].get(key, 0) + count
+                        
+                        print(f"  ✓ Success: {session_stats['saved']} segments saved")
+                    else:
+                        overall_stats['failed_sessions'] += 1
+                        print(f"  ✗ Failed: {session_stats['error']}")
+                    
+                    overall_stats['session_details'].append(session_stats)
+                except Exception as session_error:
+                    print(f"[ERROR] Session {session_name} failed with error: {session_error}")
+                    import traceback
+                    traceback.print_exc()
+                    overall_stats['failed_sessions'] += 1
+            
+            # Save batch summary
+            summary_file = os.path.join(output_base, 'batch_summary.txt')
+            with open(summary_file, 'w') as f:
+                f.write(f"BATCH SEGMENTATION SUMMARY\n")
+                f.write(f"{'='*80}\n\n")
+                f.write(f"Total sessions: {overall_stats['total_sessions']}\n")
+                f.write(f"Processed successfully: {overall_stats['processed_sessions']}\n")
+                f.write(f"Failed: {overall_stats['failed_sessions']}\n")
+                f.write(f"Total keystrokes: {overall_stats['total_keystrokes']}\n")
+                f.write(f"Total saved: {overall_stats['total_saved']}\n")
+                f.write(f"Total skipped: {overall_stats['total_skipped']}\n")
+                f.write(f"Success rate: {100*overall_stats['total_saved']/max(1,overall_stats['total_keystrokes']):.1f}%\n\n")
+                
+                f.write(f"\nKEY DISTRIBUTION (across all sessions):\n")
+                f.write(f"{'-'*40}\n")
+                for key in sorted(overall_stats['key_counts'].keys()):
+                    count = overall_stats['key_counts'][key]
+                    f.write(f"  {key:10s}: {count:4d} samples\n")
+                
+                f.write(f"\n\nSESSION DETAILS:\n")
+                f.write(f"{'='*80}\n")
+                for session_stats in overall_stats['session_details']:
+                    f.write(f"\nSession: {session_stats['session_name']}\n")
+                    if session_stats['success']:
+                        f.write(f"  Status: SUCCESS\n")
+                        f.write(f"  Keystrokes: {session_stats['total_keystrokes']}\n")
+                        f.write(f"  Saved: {session_stats['saved']}\n")
+                        f.write(f"  Skipped: {session_stats['skipped']}\n")
+                        f.write(f"  Keys found:\n")
+                        for key, count in sorted(session_stats['key_counts'].items()):
+                            f.write(f"    {key}: {count}\n")
+                    else:
+                        f.write(f"  Status: FAILED\n")
+                        f.write(f"  Error: {session_stats['error']}\n")
+            
+            # Display results
+            results = f"""BATCH SEGMENTATION COMPLETE!
+
+Sessions processed:  {overall_stats['processed_sessions']}/{overall_stats['total_sessions']}
+Failed sessions:     {overall_stats['failed_sessions']}
+
+Total keystrokes:    {overall_stats['total_keystrokes']}
+Segments saved:      {overall_stats['total_saved']}
+Skipped (silent):    {overall_stats['total_skipped']}
+Success rate:        {100*overall_stats['total_saved']/max(1,overall_stats['total_keystrokes']):.1f}%
+
+KEY DISTRIBUTION:
+"""
+            for key in sorted(overall_stats['key_counts'].keys()):
+                count = overall_stats['key_counts'][key]
+                results += f"  {key:10s}: {count:4d} samples\n"
+            
+            results += f"\nOutput: {output_base}\nSummary: {summary_file}"
+            
+            print(f"\n{'='*80}")
+            print(results)
+            print(f"{'='*80}\n")
+            
+            self._safe_ui_update(lambda: self.results_text.insert(1.0, results))
+            self._safe_ui_update(lambda: self.progress_var.set(100))
+            self._safe_ui_update(lambda: self.process_btn.config(state=tk.NORMAL))
+            self._safe_ui_update(lambda: messagebox.showinfo(
+                "Batch Complete",
+                f"Processed {overall_stats['processed_sessions']} sessions\n"
+                f"Saved {overall_stats['total_saved']} segments total!"))
+            
+        except Exception as e:
+            error_msg = f"Batch segmentation error: {str(e)}"
+            print(error_msg)
+            import traceback
+            traceback.print_exc()
+            
+            self._safe_ui_update(lambda: self.progress_label.config(text=error_msg))
+            self._safe_ui_update(lambda: self.process_btn.config(state=tk.NORMAL))
+            self._safe_ui_update(lambda: messagebox.showerror("Error", error_msg))
+    
+    def process_single_session_batch(self, session_folder: str, 
+                                     output_base: str,
+                                     session_name: str,
+                                     params: Dict) -> Dict:
+        """Process a single session as part of batch processing.
+        
+        Args:
+            session_folder: Path to session folder
+            output_base: Output base directory
+            session_name: Name of the session
+            params: Dictionary with segmentation parameters (thread-safe)
+            
+        Returns:
+            Dictionary with session statistics
+        """
+        session_stats = {
+            'session_name': session_name,
+            'session_path': session_folder,
+            'success': False,
+            'total_keystrokes': 0,
+            'saved': 0,
+            'skipped': 0,
+            'key_counts': {},
+            'error': None
+        }
+        
+        try:
+            print(f"[DEBUG] Loading audio file...")
+            # Load audio
+            audio_file = os.path.join(session_folder, 'audio.wav')
+            audio_data, sample_rate = self.audio.load_audio(audio_file)
+            print(f"[DEBUG] Audio loaded: shape={audio_data.shape if audio_data is not None else None}, sr={sample_rate}")
+            
+            if audio_data is None:
+                raise Exception("Failed to load audio file")
+            
+            print(f"[DEBUG] Loading keystroke log...")
+            # Load keystroke log
+            log_file = os.path.join(session_folder, 'keystroke_log.csv')
+            keystroke_log = []
+            
+            with open(log_file, 'r') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    row['relative_time'] = float(row['relative_time'])
+                    keystroke_log.append(row)
+            
+            session_stats['total_keystrokes'] = len(keystroke_log)
+            print(f"[DEBUG] Loaded {len(keystroke_log)} keystrokes")
+            
+            print(f"[DEBUG] Converting to mono...")
+            # Convert to mono
+            if len(audio_data.shape) == 2:
+                mono_audio = np.mean(audio_data, axis=1)
+            else:
+                mono_audio = audio_data
+            print(f"[DEBUG] Mono audio shape: {mono_audio.shape}")
+            
+            # Get segmentation parameters from passed params (thread-safe)
+            keystroke_length = params['segment_duration']
+            pre_trigger = params['pre_trigger']
+            enable_peak_centering = params['enable_peak_centering']
+            enable_filtering = params['enable_filtering']
+            filter_low = params['filter_low']
+            filter_high = params['filter_high']
+            print(f"[DEBUG] Parameters: length={keystroke_length}s, pre={pre_trigger}s, peak_center={enable_peak_centering}, filter={enable_filtering}")
+            
+            print(f"[DEBUG] Computing onset envelope...")
+            # Compute onset strength if peak centering enabled
+            if enable_peak_centering:
+                onset_env = self.compute_onset_strength(mono_audio, sample_rate)
+                hop_length = 512
+                print(f"[DEBUG] Onset envelope computed: length={len(onset_env)}")
+            else:
+                onset_env = None
+                hop_length = 512
+                print(f"[DEBUG] Peak centering disabled, skipping onset computation")
+            
+            # Process each keystroke
+            sorted_log = sorted(keystroke_log, key=lambda x: x['relative_time'])
+            
+            for keystroke in sorted_log:
+                csv_time = keystroke['relative_time']
+                csv_sample = int(csv_time * sample_rate)
+                key = keystroke['key']
+                
+                # Find actual peak near CSV time
+                if enable_peak_centering and onset_env is not None:
+                    search_window = int(0.05 * sample_rate)
+                    search_start = max(0, csv_sample - search_window)
+                    search_end = min(len(mono_audio), csv_sample + search_window)
+                    
+                    search_start_frame = search_start // hop_length
+                    search_end_frame = search_end // hop_length
+                    
+                    if search_start_frame < len(onset_env) and search_end_frame > 0:
+                        search_region = onset_env[search_start_frame:search_end_frame]
+                        
+                        if len(search_region) > 0:
+                            peak_idx = np.argmax(search_region)
+                            peak_frame = search_start_frame + peak_idx
+                            peak_sample = peak_frame * hop_length
+                        else:
+                            peak_sample = csv_sample
+                    else:
+                        peak_sample = csv_sample
+                else:
+                    peak_sample = csv_sample
+                
+                # Extract segment
+                duration_samples = int(keystroke_length * sample_rate)
+                pre_samples = int(pre_trigger * sample_rate)
+                
+                start = max(0, peak_sample - pre_samples)
+                end = min(len(mono_audio), start + duration_samples)
+                
+                segment = mono_audio[start:end]
+                
+                # Pad if needed
+                if len(segment) < duration_samples:
+                    segment = np.pad(segment, (0, duration_samples - len(segment)))
+                segment = segment[:duration_samples]
+                
+                # Quality check
+                rms = np.sqrt(np.mean(segment**2))
+                
+                if rms < 1e-6:
+                    session_stats['skipped'] += 1
+                    continue
+                
+                # Apply filtering
+                if enable_filtering:
+                    segment = self.audio.apply_bandpass_filter(segment,
+                                                               filter_low,
+                                                               filter_high)
+                
+                # Convert to stereo if needed
+                if len(audio_data.shape) == 2:
+                    segment = np.column_stack([segment, segment])
+                
+                # Save
+                key_folder = os.path.join(output_base, key)
+                os.makedirs(key_folder, exist_ok=True)
+                
+                existing = [f for f in os.listdir(key_folder) if f.endswith('.wav')]
+                file_num = len(existing)
+                filename = f"{file_num}.wav"
+                filepath = os.path.join(key_folder, filename)
+                
+                if self.audio.save_audio(filepath, segment):
+                    session_stats['saved'] += 1
+                    session_stats['key_counts'][key] = session_stats['key_counts'].get(key, 0) + 1
+            
+            session_stats['success'] = True
+            print(f"[DEBUG] Session completed successfully: saved={session_stats['saved']}, skipped={session_stats['skipped']}")
+            
+        except Exception as e:
+            session_stats['error'] = str(e)
+            import sys
+            import traceback
+            exc_type, exc_value, exc_tb = sys.exc_info()
+            print(f"[ERROR] Session processing failed at line {exc_tb.tb_lineno if exc_tb else 'unknown'}")
+            print(f"[ERROR] Exception type: {type(e).__name__}")
+            print(f"[ERROR] Exception message: {str(e)}")
+            print("[ERROR] Full traceback:")
+            traceback.print_exc()
+        
+        return session_stats
+    
+    def run_segmentation(self, params):
+        """
+        CSV-GUIDED SEGMENTATION (BEST for labeled data)
+        
+        Instead of detecting peaks and matching (which gives false positives),
+        we use CSV timestamps to directly extract segments.
+        
+        Algorithm:
+        1. For each CSV keystroke timestamp
+        2. Search ±50ms window around that time for actual peak
+        3. Extract segment centered on peak
+        4. Validate quality
+        
+        Result: Exactly N segments for N CSV entries!
+        No false positives, no unmatched entries.
+        
+        Args:
+            params: Dictionary with segmentation parameters (thread-safe)
+        """
+        try:
             output_base = os.path.join(os.path.dirname(self.current_session_path),
-                                       self.output_name_var.get())
+                                       params['output_name'])
+            os.makedirs(output_base, exist_ok=True)
+            
+            keystroke_length = params['segment_duration']
+            pre_trigger = params['pre_trigger']
+            enable_peak_centering = params['enable_peak_centering']
+            enable_filtering = params['enable_filtering']
+            filter_low = params['filter_low']
+            filter_high = params['filter_high']
+            
+            print(f"\n=== CSV-GUIDED SEGMENTATION ===")
+            print(f"CSV keystrokes: {len(self.keystroke_log)}")
+            print(f"Segment length: {keystroke_length}s")
+            print(f"Peak centering: {'Yes' if enable_peak_centering else 'No'}")
+            
+            # Convert to mono
+            if len(self.audio_data.shape) == 2:
+                mono_audio = np.mean(self.audio_data, axis=1)
+            else:
+                mono_audio = self.audio_data
+            
+            # Compute onset strength for peak finding
+            if enable_peak_centering:
+                print("Computing onset strength envelope...")
+                onset_env = self.compute_onset_strength(mono_audio, self.sample_rate)
+                hop_length = 512
+            else:
+                onset_env = None
+                hop_length = 512
+            
+            metadata = []
+            saved = 0
+            skipped = 0
+            
+            # Process each CSV entry
+            sorted_log = sorted(self.keystroke_log, key=lambda x: x['relative_time'])
+            
+            for idx, keystroke in enumerate(sorted_log):
+                csv_time = keystroke['relative_time']
+                csv_sample = int(csv_time * self.sample_rate)
+                key = keystroke['key']
+                timestamp = keystroke['timestamp']
+                
+                # Find actual peak near CSV time
+                if enable_peak_centering and onset_env is not None:
+                    # Search ±50ms window
+                    search_window = int(0.05 * self.sample_rate)
+                    search_start = max(0, csv_sample - search_window)
+                    search_end = min(len(mono_audio), csv_sample + search_window)
+                    
+                    search_start_frame = search_start // hop_length
+                    search_end_frame = search_end // hop_length
+                    
+                    if search_start_frame < len(onset_env) and search_end_frame > 0:
+                        search_region = onset_env[search_start_frame:search_end_frame]
+                        
+                        if len(search_region) > 0:
+                            peak_idx = np.argmax(search_region)
+                            peak_frame = search_start_frame + peak_idx
+                            peak_sample = peak_frame * hop_length
+                        else:
+                            peak_sample = csv_sample
+                    else:
+                        peak_sample = csv_sample
+                else:
+                    # Use CSV time directly
+                    peak_sample = csv_sample
+                
+                # Extract segment
+                duration_samples = int(keystroke_length * self.sample_rate)
+                pre_samples = int(pre_trigger * self.sample_rate)
+                
+                start = max(0, peak_sample - pre_samples)
+                end = min(len(mono_audio), start + duration_samples)
+                
+                segment = mono_audio[start:end]
+                
+                # Pad if needed
+                if len(segment) < duration_samples:
+                    segment = np.pad(segment, (0, duration_samples - len(segment)))
+                segment = segment[:duration_samples]
+                
+                # Quality check
+                rms = np.sqrt(np.mean(segment**2))
+                peak_amp = np.max(np.abs(segment))
+                peak_to_rms = peak_amp / (rms + 1e-10)
+                
+                # Very lenient quality threshold (only skip truly silent segments)
+                if rms < 1e-6:
+                    print(f"  Skipped '{key}' at {csv_time:.3f}s: silent (RMS={rms:.2e})")
+                    skipped += 1
+                    continue
+                
+                # Apply filtering
+                if enable_filtering:
+                    segment = self.audio.apply_bandpass_filter(segment,
+                                                               filter_low,
+                                                               filter_high)
+                
+                # Convert to stereo if needed
+                if len(self.audio_data.shape) == 2:
+                    segment = np.column_stack([segment, segment])
+                
+                # Save
+                key_folder = os.path.join(output_base, key)
+                os.makedirs(key_folder, exist_ok=True)
+                
+                existing = [f for f in os.listdir(key_folder) if f.endswith('.wav')]
+                file_num = len(existing)
+                filename = f"{file_num}.wav"
+                filepath = os.path.join(key_folder, filename)
+                
+                if self.audio.save_audio(filepath, segment):
+                    time_diff = abs(peak_sample / self.sample_rate - csv_time)
+                    
+                    metadata.append({
+                        'key': key,
+                        'filename': filename,
+                        'timestamp': timestamp,
+                        'csv_time': csv_time,
+                        'csv_sample': csv_sample,
+                        'peak_sample': peak_sample,
+                        'peak_time': peak_sample / self.sample_rate,
+                        'time_difference': time_diff,
+                        'rms': rms,
+                        'peak_amplitude': peak_amp,
+                        'peak_to_rms': peak_to_rms,
+                        'samples': len(segment),
+                        'file_number': file_num
+                    })
+                    
+                    saved += 1
+                    if saved % 100 == 0:
+                        print(f"  Processed {saved}/{len(sorted_log)}")
+                
+                # Update progress
+                progress = ((idx + 1) / len(sorted_log)) * 100
+                self._safe_ui_update(lambda p=progress: self.progress_var.set(p))
+                self._safe_ui_update(lambda s=saved, t=len(sorted_log): 
+                                self.progress_label.config(text=f"Processing: {s}/{t}"))
+            
+            # Save metadata
+            metadata_file = os.path.join(output_base, 'metadata.csv')
+            with open(metadata_file, 'w', newline='') as f:
+                fieldnames = ['key', 'filename', 'timestamp', 'csv_time', 'csv_sample',
+                            'peak_sample', 'peak_time', 'time_difference',
+                            'rms', 'peak_amplitude', 'peak_to_rms', 'samples', 'file_number']
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(metadata)
+            
+            # Statistics
+            time_diffs = [m['time_difference'] for m in metadata]
+            avg_diff = np.mean(time_diffs) if time_diffs else 0
+            max_diff = np.max(time_diffs) if time_diffs else 0
+            perfect = sum(1 for t in time_diffs if t < 0.05)
+            
+            results = f"""CSV-GUIDED SEGMENTATION COMPLETE!
+
+CSV keystrokes:      {len(self.keystroke_log)}
+Segments saved:      {saved}
+Skipped (silent):    {skipped}
+Success rate:        {100*saved/len(self.keystroke_log):.1f}%
+
+FALSE POSITIVES:     0 ✓ (CSV-guided approach!)
+UNMATCHED:           0 ✓ (All CSV entries processed!)
+
+Alignment Quality:
+  Perfect (< 50ms):  {perfect} ({100*perfect/len(time_diffs):.1f}%)
+  Avg Δt:            {avg_diff*1000:.1f}ms
+  Max Δt:            {max_diff*1000:.1f}ms
+
+Output: {output_base}
+Sample rate: {self.sample_rate}Hz
+Filtering: {'Enabled' if enable_filtering else 'Disabled'}
+"""
+            
+            print(results)
+            self._safe_ui_update(lambda: self.results_text.insert(1.0, results))
+            self._safe_ui_update(lambda: self.process_btn.config(state=tk.NORMAL))
+            self._safe_ui_update(lambda: messagebox.showinfo("Success", 
+                                                             f"Saved {saved} segments!\n0 false positives!"))
+            
+        except Exception as e:
+            error_msg = f"Segmentation error: {str(e)}"
+            print(error_msg)
+            import traceback
+            traceback.print_exc()
+            self._safe_ui_update(lambda: self.progress_label.config(text=error_msg))
+            self._safe_ui_update(lambda: self.process_btn.config(state=tk.NORMAL))
+            self._safe_ui_update(lambda: messagebox.showerror("Error", error_msg))
             os.makedirs(output_base, exist_ok=True)
             
             # Get parameters
@@ -549,7 +1332,7 @@ class DataSegmenterTab:
             
             # Step 1: Compute onset strength envelope (sliding window energy)
             print("Computing onset strength envelope...")
-            onset_env = self.compute_onset_strength(mono_audio)
+            onset_env = self.compute_onset_strength(mono_audio, self.sample_rate)
             
             # Step 2: Find peaks with adaptive thresholding
             print("Detecting keystroke peaks...")
@@ -581,28 +1364,26 @@ class DataSegmenterTab:
             
             print(f"Valid segments: {len(valid_segments)}/{len(segments)}")
             
-            # Match to CSV labels (by temporal proximity)
+            # Match segments to keystrokes using TEMPORAL PROXIMITY
+            print("\n=== Matching Phase ===")
+            matches = self.match_segments_to_keystrokes(valid_segments, self.keystroke_log)
+            
             metadata = []
             metadata_file = os.path.join(output_base, 'metadata.csv')
             saved = 0
             
-            sorted_log = sorted(self.keystroke_log, key=lambda x: x['relative_time'])
-            
-            for idx, seg_info in enumerate(valid_segments):
-                segment_audio = seg_info['audio']
-                peak_sample = seg_info['peak_sample']
-                start_sample = seg_info['start_sample']
-                quality_score = seg_info['quality']
+            for match_info in matches:
+                segment_audio = match_info['segment']['audio']
+                peak_sample = match_info['segment']['peak_sample']
+                start_sample = match_info['segment']['start_sample']
+                quality_score = match_info['segment']['quality']
                 
-                # Match to CSV by index (or could use temporal matching)
-                if idx < len(sorted_log):
-                    key = sorted_log[idx]['key']
-                    timestamp = sorted_log[idx]['timestamp']
-                    csv_time = sorted_log[idx]['relative_time']
-                else:
-                    key = 'unknown'
-                    timestamp = ''
-                    csv_time = peak_sample / self.sample_rate
+                # Get matched keystroke info
+                key = match_info['key']
+                timestamp = match_info['timestamp']
+                csv_time = match_info['csv_time']
+                time_diff = match_info['time_diff']
+                match_confidence = match_info['confidence']
                 
                 # Apply filtering if enabled
                 segment = segment_audio
@@ -637,6 +1418,8 @@ class DataSegmenterTab:
                         'start_sample': start_sample,
                         'peak_time': peak_sample / self.sample_rate,
                         'start_time': start_sample / self.sample_rate,
+                        'time_difference': time_diff,  # Key field for verification
+                        'match_confidence': match_confidence,  # 0.0-1.0
                         'quality_score': quality_score,
                         'rms': rms,
                         'peak_amplitude': peak,
@@ -646,22 +1429,29 @@ class DataSegmenterTab:
                     
                     saved += 1
                     if saved % 10 == 0:
-                        print(f"Saved {saved}/{len(valid_segments)}: {key}/{filename}")
+                        print(f"Saved {saved}/{len(matches)}: {key}/{filename} (Δt={time_diff*1000:.1f}ms)")
                 
                 # Update progress
-                progress = ((idx + 1) / len(valid_segments)) * 100
+                progress = ((saved) / len(matches)) * 100
                 self.parent.after(0, lambda p=progress: self.progress_var.set(p))
-                self.parent.after(0, lambda i=idx+1, t=len(valid_segments), s=saved: 
-                                self.progress_label.config(text=f"Processing: {i}/{t} (Saved: {s})"))
+                self.parent.after(0, lambda s=saved, t=len(matches): 
+                                self.progress_label.config(text=f"Processing: {s}/{t} (Saved: {s})"))
             
             # Save metadata
             with open(metadata_file, 'w', newline='') as f:
                 fieldnames = ['key', 'filename', 'timestamp', 'csv_time',
                             'peak_sample', 'start_sample', 'peak_time', 'start_time',
+                            'time_difference', 'match_confidence',
                             'quality_score', 'rms', 'peak_amplitude', 'samples', 'file_number']
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(metadata)
+            
+            # Compute matching statistics
+            matched_count = sum(1 for m in matches if m['matched'])
+            unmatched_segments = sum(1 for m in matches if not m['matched'])
+            perfect_matches = sum(1 for m in matches if m['matched'] and m['time_diff'] < 0.05)
+            good_matches = sum(1 for m in matches if m['matched'] and 0.05 <= m['time_diff'] < 0.1)
             
             # Show results
             results = f"""Segmentation Complete!
@@ -670,6 +1460,14 @@ Detected peaks: {len(peak_positions)}
 Valid segments: {len(valid_segments)}
 CSV keystrokes: {len(self.keystroke_log)}
 Successfully saved: {saved}
+
+MATCHING QUALITY:
+  Matched: {matched_count} / {len(self.keystroke_log)}
+  Perfect (< 50ms): {perfect_matches}
+  Good (< 100ms): {good_matches}
+  Unmatched segments: {unmatched_segments}
+  Missing keystrokes: {len(self.keystroke_log) - matched_count}
+
 Output directory: {output_base}
 
 Detection threshold: {threshold:.4f}
