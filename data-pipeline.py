@@ -16,6 +16,7 @@ from data_pipeline.data_collector import DataCollectorTab
 from data_pipeline.data_segmenter import DataSegmenterTab
 from data_pipeline.data_cleanup import DataCleanupApp
 from data_pipeline.data_analyzer import AudioAnalyzer
+from data_pipeline.data_merger import DataMergerTab
 
 
 class KeyboardAcousticApp:
@@ -42,6 +43,7 @@ class KeyboardAcousticApp:
         # Reference to current tab modules
         self.cleanup_app = None
         self.analyzer_app = None
+        self.merger_tab = None
         
         self.build_ui()
     
@@ -84,12 +86,17 @@ class KeyboardAcousticApp:
         self.notebook.add(self.segmenter_frame, text="✂️ Data Segmentation")
         self.segmenter_tab = DataSegmenterTab(self.segmenter_frame, self.config, self.audio)
         
-        # Tab 3: Data Cleanup (lazy loaded)
+        # Tab 3: Dataset Merger (lazy loaded)
+        self.merger_frame = tk.Frame(self.notebook)
+        self.notebook.add(self.merger_frame, text="🔀 Dataset Merger")
+        self.merger_loaded = False
+        
+        # Tab 4: Data Cleanup (lazy loaded)
         self.cleanup_frame = tk.Frame(self.notebook)
         self.notebook.add(self.cleanup_frame, text="🧹 Data Cleanup")
         self.cleanup_loaded = False
         
-        # Tab 4: Data Analyzer (lazy loaded)
+        # Tab 5: Data Analyzer (lazy loaded)
         self.analyzer_frame = tk.Frame(self.notebook)
         self.notebook.add(self.analyzer_frame, text="📊 Data Analyzer")
         self.analyzer_loaded = False
@@ -102,12 +109,16 @@ class KeyboardAcousticApp:
         """Handle tab changes - lazy load heavy modules."""
         selected_tab = self.notebook.index(self.notebook.select())
         
-        # Tab 2 (index 2) = Data Cleanup
-        if selected_tab == 2 and not self.cleanup_loaded:
+        # Tab 2 (index 2) = Dataset Merger
+        if selected_tab == 2 and not self.merger_loaded:
+            self.load_merger_tab()
+        
+        # Tab 3 (index 3) = Data Cleanup
+        elif selected_tab == 3 and not self.cleanup_loaded:
             self.load_cleanup_tab()
         
-        # Tab 3 (index 3) = Data Analyzer
-        elif selected_tab == 3 and not self.analyzer_loaded:
+        # Tab 4 (index 4) = Data Analyzer
+        elif selected_tab == 4 and not self.analyzer_loaded:
             self.load_analyzer_tab()
     
     def load_cleanup_tab(self):
@@ -124,6 +135,21 @@ class KeyboardAcousticApp:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load cleanup tool:\n{e}")
             self.status_bar.config(text="Error loading cleanup tool")
+    
+    def load_merger_tab(self):
+        """Lazy load the merger module."""
+        try:
+            self.status_bar.config(text="Loading Dataset Merger tool...")
+            self.root.update()
+            
+            # Embed merger app in frame
+            self.merger_tab = DataMergerTab(self.merger_frame, self.config, self.audio)
+            self.merger_loaded = True
+            
+            self.status_bar.config(text="Dataset Merger tool loaded successfully")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load merger tool:\n{e}")
+            self.status_bar.config(text="Error loading merger tool")
     
     def load_analyzer_tab(self):
         """Lazy load the analyzer module."""
