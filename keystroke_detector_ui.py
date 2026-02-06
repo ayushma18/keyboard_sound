@@ -15,6 +15,7 @@ import time
 import os
 from pathlib import Path
 from datetime import datetime
+from typing import List, Tuple, Dict
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -293,9 +294,16 @@ class AudioRecorder:
         self.device_id = device_id
         self.stream = None
         self.is_recording = False
-        self.audio_buffer = deque(maxlen=int(sample_rate * 5))  # 5 second buffer
+        self.audio_buffer = deque(maxlen=int(sample_rate * 5))  # 5 second rolling buffer
         self.callback_func = None
         self.threshold = 0.06
+        
+        # Advanced detection parameters (from data_segmenter.py)
+        self.segment_duration = 0.430  # seconds
+        self.detection_buffer_size = int(sample_rate * 2.0)  # 2 second buffer for detection
+        self.last_detection_time = 0
+        self.min_keystroke_interval = 0.08  # Minimum 80ms between keystrokes (debounce)
+        self.processed_sample_index = 0  # Track what we've already processed
         
     def get_available_devices(self):
         """Get list of available input devices"""
@@ -351,72 +359,235 @@ class AudioRecorder:
             self.stream = None
         self.is_recording = False
     
+    def compute_onset_strength(self, audio: np.ndarray, 
+                                hop_length: int = 512, 
+                                win_length: int = 2048) -> np.ndarray:
+        """
+        Compute onset strength envelope using STFT-based spectral flux.
+        Adapted from data_segmenter.py for real-time detection.
+        """
+        from scipy import signal as scipy_signal
+        
+        # Use STFT for frequency-aware energy computation
+        f, t, Zxx = scipy_signal.stft(audio, fs=self.sample_rate, 
+                                      nperseg=win_length, 
+                                      noverlap=win_length-hop_length)
+        
+        # Compute spectral magnitude
+        magnitude = np.abs(Zxx)
+        
+        # Focus on keystroke frequency range (50-5000 Hz)
+        freq_mask = (f >= 50) & (f <= 5000)
+        magnitude_filtered = magnitude[freq_mask, :]
+        
+        # Compute onset strength as spectral flux
+        onset_env = np.zeros(magnitude_filtered.shape[1])
+        if magnitude_filtered.shape[1] > 1:
+            onset_env[1:] = np.sum(np.maximum(0, magnitude_filtered[:, 1:] - magnitude_filtered[:, :-1]), axis=0)
+        
+        # Smooth the onset envelope
+        if len(onset_env) > 5:
+            window = scipy_signal.windows.hann(5)
+            onset_env = scipy_signal.convolve(onset_env, window / window.sum(), mode='same')
+        
+        return onset_env
+    
+    def find_peaks_with_quality(self, onset_env: np.ndarray, 
+                                  hop_length: int = 512) -> List[Tuple[int, float]]:
+        """
+        Find peaks in onset envelope with quality scores.
+        Returns list of (sample_position, quality_score) tuples.
+        """
+        from scipy.ndimage import maximum_filter
+        
+        if len(onset_env) < 10:
+            return []
+        
+        # Adaptive threshold based on onset envelope statistics
+        # Use a higher percentile to reduce false positives
+        threshold = np.percentile(onset_env, 80)  # More aggressive than data_segmenter
+        
+        # Also require minimum absolute value to reject noise
+        min_absolute_threshold = np.max(onset_env) * 0.15
+        threshold = max(threshold, min_absolute_threshold)
+        
+        # Find local maxima
+        min_distance_frames = int(0.05 * self.sample_rate / hop_length)  # 50ms minimum
+        size = min_distance_frames * 2 + 1
+        local_max = maximum_filter(onset_env, size=size, mode='constant')
+        
+        # Peak is where signal equals local maximum and exceeds threshold
+        peaks = (onset_env == local_max) & (onset_env > threshold)
+        peak_indices = np.where(peaks)[0]
+        
+        # Convert to sample positions and compute quality scores
+        peaks_with_quality = []
+        for peak_idx in peak_indices:
+            sample_pos = peak_idx * hop_length
+            
+            # Quality score based on peak prominence
+            quality = onset_env[peak_idx] / (np.max(onset_env) + 1e-10)
+            
+            peaks_with_quality.append((sample_pos, quality))
+        
+        return peaks_with_quality
+    
+    def extract_segment_centered(self, audio: np.ndarray, 
+                                   peak_sample: int,
+                                   duration: float = None) -> np.ndarray:
+        """
+        Extract audio segment centered around peak.
+        Adapted from data_segmenter.py extract_segments_centered.
+        """
+        if duration is None:
+            duration = self.segment_duration
+        
+        duration_samples = int(duration * self.sample_rate)
+        
+        # Center around peak
+        start = peak_sample - duration_samples // 2
+        end = start + duration_samples
+        
+        # Boundary checks
+        start = max(0, start)
+        end = min(len(audio), end)
+        
+        # Extract segment
+        segment = audio[start:end]
+        
+        # Pad if necessary
+        if len(segment) < duration_samples:
+            padding = duration_samples - len(segment)
+            segment = np.pad(segment, (0, padding), mode='constant')
+        
+        # Trim if too long
+        segment = segment[:duration_samples]
+        
+        return segment
+    
+    def validate_segment_quality(self, segment: np.ndarray) -> Tuple[bool, float]:
+        """
+        Validate segment quality to reject noise.
+        Adapted from data_segmenter.py validate_segments.
+        Returns (is_valid, quality_score)
+        """
+        # Check 1: Minimum RMS energy
+        rms = np.sqrt(np.mean(segment**2))
+        if rms < 1e-4:  # Silence threshold
+            return False, 0.0
+        
+        # Check 2: Peak-to-RMS ratio (keystrokes are transient)
+        peak = np.max(np.abs(segment))
+        peak_to_rms = peak / (rms + 1e-10)
+        
+        # Keystrokes typically have high peak-to-RMS ratio (>2)
+        if peak_to_rms < 2.0:
+            return False, 0.0
+        
+        # Check 3: Spectral content in keystroke frequency range
+        fft = np.fft.rfft(segment)
+        freqs = np.fft.rfftfreq(len(segment), 1/self.sample_rate)
+        magnitude = np.abs(fft)
+        
+        # Energy in 50-5000 Hz range
+        freq_mask = (freqs >= 50) & (freqs <= 5000)
+        if np.sum(freq_mask) == 0:
+            return False, 0.0
+        
+        keystroke_energy = np.sum(magnitude[freq_mask]**2)
+        total_energy = np.sum(magnitude**2)
+        
+        energy_ratio = keystroke_energy / (total_energy + 1e-10)
+        
+        # Keystrokes should have most energy in this range
+        if energy_ratio < 0.6:  # More strict than data_segmenter
+            return False, 0.0
+        
+        # Compute quality score (0-1)
+        quality = min(1.0, (peak_to_rms / 10.0) * energy_ratio)
+        
+        return True, quality
+    
     def detect_keystrokes(self):
-        """Detect keystroke segments from audio buffer"""
-        if len(self.audio_buffer) < self.sample_rate * 0.2:  # Need at least 200ms
+        """
+        Advanced keystroke detection using onset detection and quality validation.
+        Based on data_segmenter.py methods for accurate, noise-rejecting detection.
+        """
+        if len(self.audio_buffer) < self.detection_buffer_size:
+            return []
+        
+        current_time = time.time()
+        
+        # Debounce: Don't detect too frequently
+        if current_time - self.last_detection_time < 0.05:  # 50ms debounce
             return []
         
         # Convert buffer to numpy array
         audio = np.array(self.audio_buffer)
         
-        # Simple energy-based detection
-        keystrokes = []
-        window_size = int(self.sample_rate * 0.02)  # 20ms windows
-        hop_size = int(window_size / 2)
+        # Only process new audio (not already processed)
+        buffer_length = len(audio)
+        new_audio_start = max(0, buffer_length - int(self.sample_rate * 1.5))  # Look at last 1.5 seconds
         
-        # Calculate energy
-        energy = []
-        for i in range(0, len(audio) - window_size, hop_size):
-            window = audio[i:i+window_size]
-            energy.append(np.sum(window ** 2))
-        
-        if not energy:
+        if new_audio_start >= buffer_length:
             return []
         
-        energy = np.array(energy)
-        threshold = np.max(energy) * self.threshold
+        audio_to_process = audio[new_audio_start:]
         
-        # Find peaks above threshold
-        is_above = energy > threshold
+        # Compute onset strength envelope
+        hop_length = 512
+        onset_env = self.compute_onset_strength(audio_to_process, hop_length=hop_length)
         
-        # Find start and end of events
-        starts = []
-        ends = []
-        in_event = False
+        if len(onset_env) == 0:
+            return []
         
-        for i, above in enumerate(is_above):
-            if above and not in_event:
-                starts.append(i * hop_size)
-                in_event = True
-            elif not above and in_event:
-                ends.append(i * hop_size)
-                in_event = False
+        # Find peaks with quality scores
+        peaks_with_quality = self.find_peaks_with_quality(onset_env, hop_length=hop_length)
         
-        # Extract keystroke segments
-        min_duration = int(self.sample_rate * 0.05)  # 50ms minimum
-        max_duration = int(self.sample_rate * 0.5)   # 500ms maximum
+        # Extract and validate segments
+        valid_keystrokes = []
         
-        for start, end in zip(starts, ends):
-            duration = end - start
-            if min_duration <= duration <= max_duration:
-                # Extract segment with some padding
-                pad = int(self.sample_rate * 0.01)
-                seg_start = max(0, start - pad)
-                seg_end = min(len(audio), end + pad)
-                segment = audio[seg_start:seg_end]
+        for peak_sample, peak_quality in peaks_with_quality:
+            # Adjust peak position to absolute buffer position
+            absolute_peak = new_audio_start + peak_sample
+            
+            # Skip if too close to buffer boundaries
+            duration_samples = int(self.segment_duration * self.sample_rate)
+            if absolute_peak < duration_samples // 2:
+                continue
+            if absolute_peak + duration_samples // 2 > buffer_length:
+                continue
+            
+            # Extract segment centered on peak
+            segment = self.extract_segment_centered(audio, absolute_peak)
+            
+            # Validate quality
+            is_valid, quality_score = self.validate_segment_quality(segment)
+            
+            if is_valid and quality_score > 0.3:  # Quality threshold
+                valid_keystrokes.append({
+                    'audio': segment,
+                    'peak_sample': absolute_peak,
+                    'quality': quality_score,
+                    'peak_quality': peak_quality
+                })
                 
-                # Ensure minimum length for processing
-                if len(segment) >= min_duration:
-                    keystrokes.append(segment)
+                # Debug info
+                print(f"[Keystroke Detected] Position: {absolute_peak/self.sample_rate:.3f}s, "
+                      f"Quality: {quality_score:.2f}, Peak: {peak_quality:.2f}")
         
-        # Clear processed audio from buffer (keep last 1 second)
-        keep_samples = int(self.sample_rate * 1.0)
+        # Update last detection time
+        if valid_keystrokes:
+            self.last_detection_time = current_time
+        
+        # Clear old audio from buffer (keep last 2 seconds)
+        keep_samples = int(self.sample_rate * 2.0)
         if len(self.audio_buffer) > keep_samples:
-            # Convert to list, slice, convert back to deque
             buffer_list = list(self.audio_buffer)
             self.audio_buffer = deque(buffer_list[-keep_samples:], maxlen=self.audio_buffer.maxlen)
         
-        return keystrokes
+        # Return just the audio segments (for backward compatibility)
+        return [ks['audio'] for ks in valid_keystrokes]
     
     def adjust_threshold(self, threshold):
         """Adjust detection threshold"""
@@ -1433,66 +1604,99 @@ CONFUSION PATTERNS (For Worst Performing Labels)
         self._log("Recording stopped")
     
     def _processing_loop(self):
-        """Background processing loop"""
-        self._log("Processing loop started")
+        """Background processing loop with robust keystroke detection"""
+        self._log("Processing loop started with advanced detection")
         last_process_time = time.time()
         
         while not self.stop_processing:
             current_time = time.time()
             
-            if current_time - last_process_time >= 0.1:  # Process every 100ms
-                # Detect keystrokes
-                keystrokes = self.recorder.detect_keystrokes()
-                
-                for keystroke in keystrokes:
-                    try:
-                        self._log(f"Processing keystroke: {len(keystroke)} samples")
-                        
-                        # Preprocess
-                        waveform = torch.from_numpy(keystroke).float()
-                        mel_spec = self.preprocessor.process_audio(waveform)
-                        
-                        if mel_spec.shape != torch.Size([1, 64, 64]):
-                            self._log(f"Skipping keystroke with wrong shape: {mel_spec.shape}", "WARNING")
-                            continue
-                        
-                        # Save debug if enabled
-                        if self.save_mel_specs:
-                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                            self._save_debug_mel_spec(mel_spec, f"keystroke_{timestamp}")
-                            # Save audio
-                            wav_path = self.debug_dir / f"keystroke_{timestamp}.wav"
-                            sf.write(str(wav_path), keystroke, 44100)
-                        
-                        # Predict
-                        with torch.no_grad():
-                            input_tensor = mel_spec.unsqueeze(0).to(self.device)
-                            output = self.model(input_tensor)
+            # Process every 150ms (allows buffer to accumulate for better detection)
+            if current_time - last_process_time >= 0.15:
+                try:
+                    # Detect keystrokes using advanced algorithm
+                    keystrokes = self.recorder.detect_keystrokes()
+                    
+                    if keystrokes:
+                        self._log(f"Detected {len(keystrokes)} keystroke(s) in buffer")
+                    
+                    for keystroke in keystrokes:
+                        try:
+                            self._log(f"Processing keystroke: {len(keystroke)} samples ({len(keystroke)/44100:.3f}s)")
                             
-                            if output.dim() == 1:
-                                output = output.unsqueeze(0)
+                            # Ensure correct length (should be ~0.430s = 19008 samples)
+                            expected_samples = int(0.430 * 44100)
+                            if len(keystroke) != expected_samples:
+                                self._log(f"Resampling keystroke from {len(keystroke)} to {expected_samples} samples", "DEBUG")
+                                # Resample if needed
+                                if len(keystroke) < expected_samples:
+                                    keystroke = np.pad(keystroke, (0, expected_samples - len(keystroke)), mode='constant')
+                                else:
+                                    keystroke = keystroke[:expected_samples]
                             
-                            probabilities = F.softmax(output, dim=1)
-                            top5_probs, top5_indices = torch.topk(probabilities[0], 5)
-                        
-                        # Get results
-                        predicted_key = self.key_labels[top5_indices[0].item()]
-                        confidence = top5_probs[0].item() * 100
-                        
-                        self._log(f"Detected: '{predicted_key}' ({confidence:.1f}%)")
-                        
-                        # Update UI
-                        self.root.after(0, self._update_detection_display, predicted_key, confidence, top5_indices, top5_probs)
-                        self.root.after(0, self._add_to_history, predicted_key, confidence)
-                        
-                        self.keystroke_count += 1
-                        self.detection_history.append(confidence)
-                        self.root.after(0, self._update_statistics)
-                        
-                    except Exception as e:
-                        self._log(f"Error processing keystroke: {e}", "ERROR")
-                
-                last_process_time = current_time
+                            # Preprocess
+                            waveform = torch.from_numpy(keystroke).float()
+                            
+                            # Ensure waveform is 1D
+                            if waveform.dim() > 1:
+                                waveform = waveform.squeeze()
+                            
+                            mel_spec = self.preprocessor.process_audio(waveform)
+                            
+                            # Validate mel spectrogram shape
+                            if mel_spec.shape != torch.Size([1, 64, 64]):
+                                self._log(f"Invalid mel-spec shape: {mel_spec.shape}, expected [1, 64, 64]", "WARNING")
+                                continue
+                            
+                            # Save debug if enabled
+                            if self.save_mel_specs:
+                                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                                self._save_debug_mel_spec(mel_spec, f"live_keystroke_{timestamp}")
+                                # Save audio
+                                wav_path = self.debug_dir / f"live_keystroke_{timestamp}.wav"
+                                sf.write(str(wav_path), keystroke, 44100)
+                                self._log(f"Saved debug files: {timestamp}", "DEBUG")
+                            
+                            # Predict
+                            with torch.no_grad():
+                                input_tensor = mel_spec.unsqueeze(0).to(self.device)
+                                output = self.model(input_tensor)
+                                
+                                if output.dim() == 1:
+                                    output = output.unsqueeze(0)
+                                
+                                probabilities = F.softmax(output, dim=1)
+                                top5_probs, top5_indices = torch.topk(probabilities[0], 5)
+                            
+                            # Get results
+                            predicted_key = self.key_labels[top5_indices[0].item()]
+                            confidence = top5_probs[0].item() * 100
+                            
+                            # Only show predictions with reasonable confidence
+                            if confidence > 10.0:  # Minimum 10% confidence threshold
+                                self._log(f"✓ Detected: '{predicted_key}' (confidence: {confidence:.1f}%)")
+                                
+                                # Update UI
+                                self.root.after(0, self._update_detection_display, predicted_key, confidence, top5_indices, top5_probs)
+                                self.root.after(0, self._add_to_history, predicted_key, confidence)
+                                
+                                self.keystroke_count += 1
+                                self.detection_history.append(confidence)
+                                self.root.after(0, self._update_statistics)
+                            else:
+                                self._log(f"Low confidence detection: '{predicted_key}' ({confidence:.1f}%) - skipped", "DEBUG")
+                            
+                        except Exception as e:
+                            self._log(f"Error processing keystroke: {e}", "ERROR")
+                            import traceback
+                            traceback.print_exc()
+                    
+                    last_process_time = current_time
+                    
+                except Exception as e:
+                    self._log(f"Error in detection loop: {e}", "ERROR")
+                    import traceback
+                    traceback.print_exc()
             
             # Update recording time
             if self.is_recording:

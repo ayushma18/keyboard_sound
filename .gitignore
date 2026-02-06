@@ -24,3 +24,4 @@ venv
 myenv
 backups/
 recordings
+model/debug_output/*
