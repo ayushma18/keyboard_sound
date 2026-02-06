@@ -592,6 +592,18 @@ class KeystrokeDetectionUI:
         )
         self.test_wav_btn.pack(side=tk.LEFT, padx=10)
         
+        self.bulk_check_btn = tk.Button(
+            controls_frame,
+            text="📊 Bulk Check",
+            command=self._bulk_check_folder,
+            font=('Arial', 10),
+            bg='#e67e22',
+            fg='white',
+            width=15,
+            state=tk.DISABLED
+        )
+        self.bulk_check_btn.pack(side=tk.LEFT, padx=10)
+        
         # Debug options
         debug_frame = tk.Frame(recording_frame)
         debug_frame.pack(fill=tk.X, pady=5)
@@ -869,6 +881,7 @@ class KeystrokeDetectionUI:
             self.model_status_label.config(text="✓ Model loaded successfully", fg='green')
             self.record_btn.config(state=tk.NORMAL)
             self.test_wav_btn.config(state=tk.NORMAL)
+            self.bulk_check_btn.config(state=tk.NORMAL)
             self.status_bar.config(text=f"Model loaded: {os.path.basename(model_path)}")
             
             self._log("Model loaded successfully!")
@@ -881,6 +894,412 @@ class KeystrokeDetectionUI:
             messagebox.showerror("Error", f"Failed to load model:\n{str(e)}")
             self.model_loaded = False
             self.status_bar.config(text="Model loading failed")
+    
+    def _bulk_check_folder(self):
+        """Bulk check segmented audio files in a folder"""
+        if not self.model_loaded:
+            messagebox.showerror("Error", "Please load a model first!")
+            return
+        
+        folder_path = filedialog.askdirectory(
+            title="Select Segmented Audio Folder",
+            initialdir="."
+        )
+        
+        if not folder_path:
+            return
+        
+        # Create results window
+        results_window = tk.Toplevel(self.root)
+        results_window.title("Bulk Check Results")
+        results_window.geometry("800x600")
+        
+        # Title
+        title_frame = tk.Frame(results_window, bg='#34495e', height=50)
+        title_frame.pack(fill=tk.X)
+        title_frame.pack_propagate(False)
+        
+        title_label = tk.Label(
+            title_frame,
+            text="📊 Bulk Check Results",
+            font=('Arial', 16, 'bold'),
+            bg='#34495e',
+            fg='white'
+        )
+        title_label.pack(pady=10)
+        
+        # Progress frame
+        progress_frame = tk.Frame(results_window, padx=20, pady=10)
+        progress_frame.pack(fill=tk.X)
+        
+        progress_label = tk.Label(progress_frame, text="Processing...", font=('Arial', 10))
+        progress_label.pack()
+        
+        progress_bar = ttk.Progressbar(progress_frame, length=700, mode='determinate')
+        progress_bar.pack(pady=5)
+        
+        # Results frame
+        results_frame = tk.LabelFrame(results_window, text="Summary", font=('Arial', 11, 'bold'), padx=20, pady=15)
+        results_frame.pack(fill=tk.X, padx=20, pady=10)
+        
+        summary_text = tk.Text(results_frame, height=10, font=('Courier', 9), bg='#f8f9fa')
+        summary_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Notebook for tabs
+        notebook = ttk.Notebook(results_window)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
+        
+        # Tab 1: Detailed Results
+        details_frame = tk.Frame(notebook)
+        notebook.add(details_frame, text="Detailed Results")
+        
+        details_scrollbar = tk.Scrollbar(details_frame)
+        details_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        details_text = tk.Text(details_frame, font=('Courier', 9), yscrollcommand=details_scrollbar.set)
+        details_text.pack(fill=tk.BOTH, expand=True)
+        details_scrollbar.config(command=details_text.yview)
+        
+        # Tab 2: Statistics & Analysis
+        stats_frame = tk.Frame(notebook)
+        notebook.add(stats_frame, text="Statistics & Analysis")
+        
+        stats_scrollbar = tk.Scrollbar(stats_frame)
+        stats_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        stats_text = tk.Text(stats_frame, font=('Courier', 9), yscrollcommand=stats_scrollbar.set, bg='#f8f9fa')
+        stats_text.pack(fill=tk.BOTH, expand=True)
+        stats_scrollbar.config(command=stats_text.yview)
+        
+        # Start processing in thread
+        def process_folder():
+            try:
+                self._log(f"Starting bulk check on: {folder_path}")
+                
+                # Find all subdirectories (each representing a label)
+                folder_path_obj = Path(folder_path)
+                label_folders = [f for f in folder_path_obj.iterdir() if f.is_dir()]
+                
+                if not label_folders:
+                    self._log("No subdirectories found!", "ERROR")
+                    results_window.after(0, lambda: messagebox.showerror("Error", "No label subdirectories found in the selected folder!"))
+                    results_window.after(0, results_window.destroy)
+                    return
+                
+                total_files = 0
+                correct = 0
+                wrong = 0
+                errors = 0
+                results_by_label = {}
+                confusion_data = {}  # Track what model predicted for each label
+                all_predictions = []  # Track all predictions to find bias
+                
+                # Count total files
+                all_wav_files = []
+                for label_folder in label_folders:
+                    expected_label = label_folder.name
+                    wav_files = list(label_folder.glob("*.wav"))
+                    for wav_file in wav_files:
+                        all_wav_files.append((wav_file, expected_label))
+                
+                total_files = len(all_wav_files)
+                
+                if total_files == 0:
+                    self._log("No WAV files found!", "ERROR")
+                    results_window.after(0, lambda: messagebox.showerror("Error", "No WAV files found in the subdirectories!"))
+                    results_window.after(0, results_window.destroy)
+                    return
+                
+                self._log(f"Found {total_files} files across {len(label_folders)} labels")
+                
+                # Process each file
+                for idx, (wav_file, expected_label) in enumerate(all_wav_files):
+                    try:
+                        # Load audio
+                        audio_data, sr = sf.read(str(wav_file), dtype='float32')
+                        
+                        # Convert to torch tensor
+                        if len(audio_data.shape) == 1:
+                            waveform = torch.from_numpy(audio_data).unsqueeze(0)
+                        else:
+                            waveform = torch.from_numpy(audio_data.mean(axis=1)).unsqueeze(0)
+                        
+                        # Resample if needed
+                        if sr != 44100:
+                            resampler = torchaudio.transforms.Resample(sr, 44100)
+                            waveform = resampler(waveform)
+                        
+                        # Process
+                        mel_spec = self.preprocessor.process_audio(waveform)
+                        
+                        if mel_spec.shape != torch.Size([1, 64, 64]):
+                            self._log(f"Skipping {wav_file.name}: wrong shape {mel_spec.shape}", "WARNING")
+                            errors += 1
+                            continue
+                        
+                        # Predict
+                        with torch.no_grad():
+                            input_tensor = mel_spec.unsqueeze(0).to(self.device)
+                            output = self.model(input_tensor)
+                            
+                            if output.dim() == 1:
+                                output = output.unsqueeze(0)
+                            
+                            probabilities = F.softmax(output, dim=1)
+                            predicted_idx = torch.argmax(probabilities[0]).item()
+                            predicted_label = self.key_labels[predicted_idx]
+                            confidence = probabilities[0][predicted_idx].item() * 100
+                        
+                        # Check if correct
+                        is_correct = (predicted_label == expected_label)
+                        
+                        if is_correct:
+                            correct += 1
+                        else:
+                            wrong += 1
+                        
+                        # Track all predictions for bias analysis
+                        all_predictions.append(predicted_label)
+                        
+                        # Store per-label results
+                        if expected_label not in results_by_label:
+                            results_by_label[expected_label] = {
+                                'total': 0,
+                                'correct': 0,
+                                'wrong': 0,
+                                'confidences': []
+                            }
+                        
+                        results_by_label[expected_label]['total'] += 1
+                        results_by_label[expected_label]['confidences'].append(confidence)
+                        if is_correct:
+                            results_by_label[expected_label]['correct'] += 1
+                        else:
+                            results_by_label[expected_label]['wrong'] += 1
+                        
+                        # Track confusion matrix data
+                        if expected_label not in confusion_data:
+                            confusion_data[expected_label] = {}
+                        if predicted_label not in confusion_data[expected_label]:
+                            confusion_data[expected_label][predicted_label] = 0
+                        confusion_data[expected_label][predicted_label] += 1
+                        
+                        # Add to details
+                        status = "✓" if is_correct else "✗"
+                        color = "green" if is_correct else "red"
+                        detail_line = f"{status} {wav_file.name:40s} Expected: {expected_label:2s}  Predicted: {predicted_label:2s}  ({confidence:5.1f}%)\n"
+                        
+                        def update_details(line, tag):
+                            details_text.insert(tk.END, line, tag)
+                            details_text.tag_config(tag, foreground=color)
+                            details_text.see(tk.END)
+                        
+                        results_window.after(0, update_details, detail_line, f"tag_{idx}")
+                        
+                    except Exception as e:
+                        self._log(f"Error processing {wav_file.name}: {e}", "ERROR")
+                        errors += 1
+                    
+                    # Update progress
+                    progress = (idx + 1) / total_files * 100
+                    results_window.after(0, lambda p=progress, i=idx+1, t=total_files: (
+                        progress_bar.config(value=p),
+                        progress_label.config(text=f"Processing: {i}/{t} files ({p:.1f}%)")
+                    ))
+                
+                # Calculate success rate
+                processed = correct + wrong
+                success_rate = (correct / processed * 100) if processed > 0 else 0
+                
+                # Analyze predictions for bias
+                from collections import Counter
+                prediction_counts = Counter(all_predictions)
+                
+                # Calculate per-label statistics
+                label_stats = []
+                for label in sorted(results_by_label.keys()):
+                    stats = results_by_label[label]
+                    label_accuracy = (stats['correct'] / stats['total'] * 100) if stats['total'] > 0 else 0
+                    avg_confidence = sum(stats['confidences']) / len(stats['confidences']) if stats['confidences'] else 0
+                    label_stats.append({
+                        'label': label,
+                        'accuracy': label_accuracy,
+                        'correct': stats['correct'],
+                        'total': stats['total'],
+                        'avg_conf': avg_confidence
+                    })
+                
+                # Sort by accuracy
+                best_labels = sorted(label_stats, key=lambda x: x['accuracy'], reverse=True)[:5]
+                worst_labels = sorted(label_stats, key=lambda x: x['accuracy'])[:5]
+                
+                # Find most predicted labels (potential bias)
+                most_predicted = prediction_counts.most_common(5)
+                
+                # Display summary
+                summary = f"""
+╔══════════════════════════════════════════════════════════════╗
+║                     BULK CHECK SUMMARY                        ║
+╚══════════════════════════════════════════════════════════════╝
+
+Folder: {folder_path_obj.name}
+
+Total Files:        {total_files}
+Processed:          {processed}
+Errors:             {errors}
+
+✓ Correct:          {correct}
+✗ Wrong:            {wrong}
+
+SUCCESS RATE:       {success_rate:.2f}%
+Accuracy:           {correct}/{processed}
+
+═══════════════════════════════════════════════════════════════
+"""
+                
+                # Create detailed statistics report
+                stats_report = f"""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                        DETAILED STATISTICS & ANALYSIS                         ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+OVERALL PERFORMANCE
+───────────────────────────────────────────────────────────────────────────────
+Total Samples:          {processed}
+Correct Predictions:    {correct} ({success_rate:.2f}%)
+Wrong Predictions:      {wrong} ({100-success_rate:.2f}%)
+Error Rate:             {(wrong/processed*100) if processed > 0 else 0:.2f}%
+
+
+PER-LABEL ACCURACY (All Labels)
+───────────────────────────────────────────────────────────────────────────────
+Label  | Correct | Total | Accuracy | Avg Confidence
+────---|---------|-------|----------|----------------
+"""
+                
+                for item in sorted(label_stats, key=lambda x: x['label']):
+                    stats_report += f"{item['label']:^6s} | {item['correct']:^7d} | {item['total']:^5d} | {item['accuracy']:^7.2f}% | {item['avg_conf']:^13.2f}%\n"
+                
+                stats_report += f"""
+
+BEST PERFORMING LABELS (Top 5)
+───────────────────────────────────────────────────────────────────────────────
+Rank | Label | Accuracy | Correct/Total | Avg Confidence
+-----|-------|----------|---------------|----------------
+"""
+                
+                for idx, item in enumerate(best_labels, 1):
+                    stats_report += f"{idx:^4d} | {item['label']:^5s} | {item['accuracy']:^7.2f}% | {item['correct']:^5d}/{item['total']:^5d} | {item['avg_conf']:^13.2f}%\n"
+                
+                stats_report += f"""
+
+WORST PERFORMING LABELS (Bottom 5)
+───────────────────────────────────────────────────────────────────────────────
+Rank | Label | Accuracy | Correct/Total | Avg Confidence
+-----|-------|----------|---------------|----------------
+"""
+                
+                for idx, item in enumerate(worst_labels, 1):
+                    stats_report += f"{idx:^4d} | {item['label']:^5s} | {item['accuracy']:^7.2f}% | {item['correct']:^5d}/{item['total']:^5d} | {item['avg_conf']:^13.2f}%\n"
+                
+                stats_report += f"""
+
+MODEL PREDICTION BIAS ANALYSIS
+───────────────────────────────────────────────────────────────────────────────
+Most Frequently Predicted Labels (Top 5):
+
+Label | Times Predicted | % of All Predictions
+------|-----------------|---------------------
+"""
+                
+                for label, count in most_predicted:
+                    percentage = (count / len(all_predictions) * 100) if all_predictions else 0
+                    stats_report += f"{label:^5s} | {count:^15d} | {percentage:^19.2f}%\n"
+                
+                # Analyze prediction bias vs actual distribution
+                actual_distribution = {label: stats['total'] for label, stats in results_by_label.items()}
+                predicted_distribution = dict(prediction_counts)
+                
+                bias_analysis = []
+                for label in results_by_label.keys():
+                    actual_count = actual_distribution.get(label, 0)
+                    predicted_count = predicted_distribution.get(label, 0)
+                    if actual_count > 0:
+                        bias_ratio = predicted_count / actual_count
+                        bias_analysis.append((label, bias_ratio, actual_count, predicted_count))
+                
+                # Sort by bias ratio to find over-predicted and under-predicted labels
+                over_predicted = sorted([x for x in bias_analysis if x[1] > 1.0], key=lambda x: x[1], reverse=True)[:5]
+                under_predicted = sorted([x for x in bias_analysis if x[1] < 1.0], key=lambda x: x[1])[:5]
+                
+                if over_predicted:
+                    stats_report += f"""
+
+OVER-PREDICTED LABELS (Model bias towards these)
+───────────────────────────────────────────────────────────────────────────────
+Label | Bias Ratio | Actual Count | Predicted Count
+------|------------|--------------|----------------
+"""
+                    for label, ratio, actual, predicted in over_predicted:
+                        stats_report += f"{label:^5s} | {ratio:^10.2f} | {actual:^12d} | {predicted:^15d}\n"
+                    stats_report += "\nNote: Bias Ratio > 1.0 means model predicts this label more than it appears\n"
+                
+                if under_predicted:
+                    stats_report += f"""
+
+UNDER-PREDICTED LABELS (Model avoids these)
+───────────────────────────────────────────────────────────────────────────────
+Label | Bias Ratio | Actual Count | Predicted Count
+------|------------|--------------|----------------
+"""
+                    for label, ratio, actual, predicted in under_predicted:
+                        stats_report += f"{label:^5s} | {ratio:^10.2f} | {actual:^12d} | {predicted:^15d}\n"
+                    stats_report += "\nNote: Bias Ratio < 1.0 means model predicts this label less than it appears\n"
+                
+                # Add confusion patterns for worst performing labels
+                stats_report += f"""
+
+CONFUSION PATTERNS (For Worst Performing Labels)
+───────────────────────────────────────────────────────────────────────────────
+"""
+                
+                for item in worst_labels[:3]:  # Show top 3 worst
+                    label = item['label']
+                    if label in confusion_data:
+                        stats_report += f"\nLabel '{label}' (Accuracy: {item['accuracy']:.2f}%):\n"
+                        stats_report += "  Often confused with:\n"
+                        
+                        # Sort by count, excluding correct predictions
+                        confusions = [(pred, count) for pred, count in confusion_data[label].items() if pred != label]
+                        confusions = sorted(confusions, key=lambda x: x[1], reverse=True)[:5]
+                        
+                        for pred_label, count in confusions:
+                            percentage = (count / item['total'] * 100) if item['total'] > 0 else 0
+                            stats_report += f"    → '{pred_label}': {count} times ({percentage:.1f}%)\n"
+                
+                stats_report += "\n" + "═" * 79 + "\n"
+                
+                # Update UI
+                results_window.after(0, lambda: (
+                    summary_text.delete('1.0', tk.END),
+                    summary_text.insert(tk.END, summary),
+                    stats_text.delete('1.0', tk.END),
+                    stats_text.insert(tk.END, stats_report),
+                    progress_label.config(text=f"✓ Completed! Success Rate: {success_rate:.2f}%")
+                ))
+                
+                self._log(f"Bulk check completed: {success_rate:.2f}% success rate")
+                self._log(f"Best: {best_labels[0]['label']} ({best_labels[0]['accuracy']:.1f}%), Worst: {worst_labels[0]['label']} ({worst_labels[0]['accuracy']:.1f}%)")
+                
+            except Exception as e:
+                self._log(f"Error in bulk check: {e}", "ERROR")
+                import traceback
+                self._log(traceback.format_exc(), "ERROR")
+                results_window.after(0, lambda: messagebox.showerror("Error", f"Bulk check failed:\n{str(e)}"))
+        
+        # Start processing thread
+        thread = threading.Thread(target=process_folder, daemon=True)
+        thread.start()
     
     def _test_wav_file(self):
         """Test with a WAV file"""

@@ -1,6 +1,7 @@
 {
     "mic_id": "test",
     "keyboard_id": "test",
-    "input_device": 2,
-    "output_device": 5
+    "input_device": 1,
+    "output_device": 6,
+    "sample_rate": 44100
 }
