@@ -27,10 +27,6 @@ from torchvision.ops import SqueezeExcitation
 from torchvision.transforms import Compose, ToTensor
 
 
-# ============================================================================
-# MODEL ARCHITECTURE (from phone.ipynb)
-# ============================================================================
-
 class Stem(nn.Sequential):
     def __init__(self, out_channels):
         super().__init__(
@@ -302,8 +298,9 @@ class AudioRecorder:
         self.segment_duration = 0.430  # seconds
         self.detection_buffer_size = int(sample_rate * 2.0)  # 2 second buffer for detection
         self.last_detection_time = 0
-        self.min_keystroke_interval = 0.08  # Minimum 80ms between keystrokes (debounce)
+        self.min_keystroke_interval = 0.12  # Minimum 120ms between keystrokes
         self.processed_sample_index = 0  # Track what we've already processed
+        self.recent_detection_times = deque(maxlen=5)  # Track recent detection timestamps
         
     def get_available_devices(self):
         """Get list of available input devices"""
@@ -412,7 +409,7 @@ class AudioRecorder:
         threshold = max(threshold, min_absolute_threshold)
         
         # Find local maxima
-        min_distance_frames = int(0.05 * self.sample_rate / hop_length)  # 50ms minimum
+        min_distance_frames = int(0.10 * self.sample_rate / hop_length)  # 100ms minimum
         size = min_distance_frames * 2 + 1
         local_max = maximum_filter(onset_env, size=size, mode='constant')
         
@@ -512,14 +509,21 @@ class AudioRecorder:
         """
         Advanced keystroke detection using onset detection and quality validation.
         Based on data_segmenter.py methods for accurate, noise-rejecting detection.
+        
+        Double-detection prevention:
+        - 80ms debounce between detection cycles
+        - 120ms minimum distance between peaks in onset envelope
+        - 120ms minimum interval between actual detections (time-based)
+        - Process only one keystroke per cycle
+        - 1.0s processing window for reliable detection
         """
         if len(self.audio_buffer) < self.detection_buffer_size:
             return []
         
         current_time = time.time()
         
-        # Debounce: Don't detect too frequently
-        if current_time - self.last_detection_time < 0.05:  # 50ms debounce
+        # Simple debounce: Don't run detection too frequently
+        if current_time - self.last_detection_time < 0.08:  # 80ms debounce
             return []
         
         # Convert buffer to numpy array
@@ -527,7 +531,7 @@ class AudioRecorder:
         
         # Only process new audio (not already processed)
         buffer_length = len(audio)
-        new_audio_start = max(0, buffer_length - int(self.sample_rate * 1.5))  # Look at last 1.5 seconds
+        new_audio_start = max(0, buffer_length - int(self.sample_rate * 1.0))  # Look at last 1.0 second
         
         if new_audio_start >= buffer_length:
             return []
@@ -565,6 +569,12 @@ class AudioRecorder:
             is_valid, quality_score = self.validate_segment_quality(segment)
             
             if is_valid and quality_score > 0.3:  # Quality threshold
+                # Time-based deduplication: Check if we detected something very recently
+                time_since_last = current_time - self.last_detection_time
+                if time_since_last < self.min_keystroke_interval and len(valid_keystrokes) > 0:
+                    # Skip this detection - too close to previous one
+                    continue
+                
                 valid_keystrokes.append({
                     'audio': segment,
                     'peak_sample': absolute_peak,
@@ -572,13 +582,16 @@ class AudioRecorder:
                     'peak_quality': peak_quality
                 })
                 
+                # Update detection time immediately when we find a valid keystroke
+                self.last_detection_time = current_time
+                self.recent_detection_times.append(current_time)
+                
                 # Debug info
                 print(f"[Keystroke Detected] Position: {absolute_peak/self.sample_rate:.3f}s, "
                       f"Quality: {quality_score:.2f}, Peak: {peak_quality:.2f}")
-        
-        # Update last detection time
-        if valid_keystrokes:
-            self.last_detection_time = current_time
+                
+                # Only detect one keystroke per cycle to avoid issues
+                break
         
         # Clear old audio from buffer (keep last 2 seconds)
         keep_samples = int(self.sample_rate * 2.0)
@@ -1611,8 +1624,8 @@ CONFUSION PATTERNS (For Worst Performing Labels)
         while not self.stop_processing:
             current_time = time.time()
             
-            # Process every 150ms (allows buffer to accumulate for better detection)
-            if current_time - last_process_time >= 0.15:
+            # Process every 100ms (balanced between responsiveness and avoiding overlaps)
+            if current_time - last_process_time >= 0.10:
                 try:
                     # Detect keystrokes using advanced algorithm
                     keystrokes = self.recorder.detect_keystrokes()
