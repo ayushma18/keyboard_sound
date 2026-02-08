@@ -700,6 +700,7 @@ class KeystrokeDetectionUI:
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.model_loaded = False
         self.model_path = None
+        self.num_classes = 36  # Default, will be updated when model is loaded
         
         # Audio components
         self.preprocessor = AudioPreprocessor(sample_rate=44100)
@@ -712,10 +713,11 @@ class KeystrokeDetectionUI:
         self.stop_processing = False
         self.start_time = None
         
-        # Key labels (0-9, a-z)
+        # Key labels (0-9, a-z) - will be updated based on model
         digits = [str(digit) for digit in range(10)]
         alphabet = [chr(ascii_code) for ascii_code in range(ord('a'), ord('z') + 1)]
         self.key_labels = digits + alphabet
+        self.alphabet_only = alphabet  # Store for 26-class models
         
         # Statistics
         self.keystroke_count = 0
@@ -1100,27 +1102,37 @@ class KeystrokeDetectionUI:
         self._log("No model found. Please load manually.", "WARNING")
     
     def _detect_model_type(self, state_dict):
-        """Detect model type from state_dict keys"""
+        """Detect model type and num_classes from state_dict keys"""
         keys = list(state_dict.keys())
         
         # Check for CNN model keys (simple CNN architecture)
         cnn_keys = ['conv1.weight', 'conv2.weight', 'conv3.weight', 'fc1.weight', 'fc2.weight']
         if any(key in keys for key in cnn_keys):
             self._log(f"Detected CNN keys: {[k for k in cnn_keys if k in keys]}")
-            return 'CNN'
+            # Detect number of classes from final layer
+            if 'fc2.weight' in state_dict:
+                num_classes = state_dict['fc2.weight'].shape[0]
+                self._log(f"Detected {num_classes} classes from fc2.weight shape")
+                return 'CNN', num_classes
+            return 'CNN', 36  # Default
         
         # Check for CoAtNet model keys (Sequential structure with numeric indices)
         coatnet_keys = ['0.0.0.weight', '1.0.mb_conv.0.weight', '3.0.0.relative_bias']
         if any(key in keys for key in coatnet_keys):
             self._log(f"Detected CoAtNet keys: {[k for k in coatnet_keys if k in keys]}")
-            return 'CoAtNet'
+            # Detect number of classes from head layer
+            if '5.fc.weight' in state_dict:
+                num_classes = state_dict['5.fc.weight'].shape[0]
+                self._log(f"Detected {num_classes} classes from head layer")
+                return 'CoAtNet', num_classes
+            return 'CoAtNet', 36  # Default
         
         # If we have keys but no match, log for debugging
         self._log(f"First 5 keys in state_dict: {keys[:5]}")
         
         # Default to CNN if unsure
         self._log("Defaulting to CNN model type")
-        return 'CNN'
+        return 'CNN', 36
     
     def _load_model(self):
         """Load the model (auto-detects CNN or CoAtNet)"""
@@ -1140,25 +1152,37 @@ class KeystrokeDetectionUI:
             self._log("Loading state_dict...")
             state_dict = torch.load(model_path, map_location=self.device)
             
-            # Detect model type
-            model_type = self._detect_model_type(state_dict)
+            # Detect model type and number of classes
+            model_type, num_classes = self._detect_model_type(state_dict)
             self._log(f"Detected model type: {model_type}")
             
             # Create appropriate model
             if model_type == 'CNN':
-                self._log("Creating CNN model...")
-                self.model = CNN(num_classes=36)
+                self._log(f"Creating CNN model with {num_classes} classes...")
+                self.model = CNN(num_classes=num_classes)
             else:
-                self._log("Creating CoAtNet-1 model...")
+                self._log(f"Creating CoAtNet-1 model with {num_classes} classes...")
                 nums_blocks = [2, 2, 3, 5, 2]           # L
                 channels = [64, 96, 192, 384, 768]      # D
-                self.model = MyCoAtNet(nums_blocks, channels, num_classes=36)
+                self.model = MyCoAtNet(nums_blocks, channels, num_classes=num_classes)
             
             # Load weights
             self._log("Loading model weights...")
             self.model.load_state_dict(state_dict)
             self.model.to(self.device)
             self.model.eval()
+            
+            # Update key labels based on number of classes
+            self.num_classes = num_classes
+            if num_classes == 26:
+                self.key_labels = self.alphabet_only
+                self._log("Using alphabet-only labels (a-z)")
+            elif num_classes == 36:
+                digits = [str(digit) for digit in range(10)]
+                self.key_labels = digits + self.alphabet_only
+                self._log("Using alphanumeric labels (0-9, a-z)")
+            else:
+                self._log(f"Warning: Unusual number of classes ({num_classes}), using default labels", "WARNING")
             
             # Count parameters
             total_params = sum(p.numel() for p in self.model.parameters())
