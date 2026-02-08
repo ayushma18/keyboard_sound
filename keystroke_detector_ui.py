@@ -1,6 +1,7 @@
 """
-Keystroke Detection UI - Reimplemented from phone.ipynb
-Exact implementation matching the CoAtNet model architecture and preprocessing pipeline
+Keystroke Detection UI - Supporting Both CNN and CoAtNet Models
+Auto-detects model architecture from state_dict and loads appropriately
+Exact implementation matching the model architectures from CNN.ipynb and phone.ipynb
 """
 
 import tkinter as tk
@@ -245,6 +246,80 @@ class MyCoAtNet(nn.Sequential):
         head = Head(layer_out_channels[4], num_classes)
         
         super().__init__(s0, s1, s2, s3, s4, head)
+
+
+# ============================================================================
+# CNN MODEL (from CNN.ipynb)
+# ============================================================================
+
+class CNN(nn.Module):
+    """Simple CNN model from CNN.ipynb for keystroke classification"""
+    def __init__(self, num_classes=36):
+        super().__init__()
+        
+        # Block 1: Conv2D 1->64
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.dropout1 = nn.Dropout2d(0.25)
+        
+        # Block 2: Conv2D 64->128
+        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(128)
+        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.dropout2 = nn.Dropout2d(0.25)
+        
+        # Block 3: Conv2D 128->256
+        self.conv3 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm2d(256)
+        self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.dropout3 = nn.Dropout2d(0.25)
+        
+        # Global Average Pooling
+        self.global_pool = nn.AdaptiveAvgPool2d(1)
+        
+        # Dense layers
+        self.fc1 = nn.Linear(256, 128)
+        self.bn4 = nn.BatchNorm1d(128)
+        self.dropout4 = nn.Dropout(0.5)
+        
+        self.fc2 = nn.Linear(128, num_classes)
+    
+    def forward(self, x):
+        # Block 1
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+        x = self.pool1(x)
+        x = self.dropout1(x)
+        
+        # Block 2
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
+        x = self.pool2(x)
+        x = self.dropout2(x)
+        
+        # Block 3
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = F.relu(x)
+        x = self.pool3(x)
+        x = self.dropout3(x)
+        
+        # Global pooling and flatten
+        x = self.global_pool(x)
+        x = x.view(x.size(0), -1)
+        
+        # Dense layers
+        x = self.fc1(x)
+        x = self.bn4(x)
+        x = F.relu(x)
+        x = self.dropout4(x)
+        
+        x = self.fc2(x)
+        
+        return x
 
 
 # ============================================================================
@@ -616,7 +691,7 @@ class KeystrokeDetectionUI:
     
     def __init__(self, root):
         self.root = root
-        self.root.title("Keystroke Detection System - CoAtNet")
+        self.root.title("Keystroke Detection System - CNN/CoAtNet")
         self.root.geometry("900x700")
         self.root.resizable(True, True)
         
@@ -669,7 +744,7 @@ class KeystrokeDetectionUI:
         
         title_label = tk.Label(
             title_frame,
-            text="🎹 Keystroke Detection - CoAtNet",
+            text="🎹 Keystroke Detection - CNN/CoAtNet",
             font=('Arial', 18, 'bold'),
             bg='#2c3e50',
             fg='white'
@@ -1024,8 +1099,31 @@ class KeystrokeDetectionUI:
         
         self._log("No model found. Please load manually.", "WARNING")
     
+    def _detect_model_type(self, state_dict):
+        """Detect model type from state_dict keys"""
+        keys = list(state_dict.keys())
+        
+        # Check for CNN model keys (simple CNN architecture)
+        cnn_keys = ['conv1.weight', 'conv2.weight', 'conv3.weight', 'fc1.weight', 'fc2.weight']
+        if any(key in keys for key in cnn_keys):
+            self._log(f"Detected CNN keys: {[k for k in cnn_keys if k in keys]}")
+            return 'CNN'
+        
+        # Check for CoAtNet model keys (Sequential structure with numeric indices)
+        coatnet_keys = ['0.0.0.weight', '1.0.mb_conv.0.weight', '3.0.0.relative_bias']
+        if any(key in keys for key in coatnet_keys):
+            self._log(f"Detected CoAtNet keys: {[k for k in coatnet_keys if k in keys]}")
+            return 'CoAtNet'
+        
+        # If we have keys but no match, log for debugging
+        self._log(f"First 5 keys in state_dict: {keys[:5]}")
+        
+        # Default to CNN if unsure
+        self._log("Defaulting to CNN model type")
+        return 'CNN'
+    
     def _load_model(self):
-        """Load the CoAtNet model"""
+        """Load the model (auto-detects CNN or CoAtNet)"""
         model_path = self.model_path_var.get()
         
         if not model_path or not os.path.exists(model_path):
@@ -1038,15 +1136,26 @@ class KeystrokeDetectionUI:
             self.status_bar.config(text="Loading model...")
             self.root.update()
             
-            # Create CoAtNet-1 model (from phone.ipynb)
-            self._log("Creating CoAtNet-1 model...")
-            nums_blocks = [2, 2, 3, 5, 2]           # L
-            channels = [64, 96, 192, 384, 768]      # D
-            self.model = MyCoAtNet(nums_blocks, channels, num_classes=36)
+            # Load state_dict first to detect model type
+            self._log("Loading state_dict...")
+            state_dict = torch.load(model_path, map_location=self.device)
+            
+            # Detect model type
+            model_type = self._detect_model_type(state_dict)
+            self._log(f"Detected model type: {model_type}")
+            
+            # Create appropriate model
+            if model_type == 'CNN':
+                self._log("Creating CNN model...")
+                self.model = CNN(num_classes=36)
+            else:
+                self._log("Creating CoAtNet-1 model...")
+                nums_blocks = [2, 2, 3, 5, 2]           # L
+                channels = [64, 96, 192, 384, 768]      # D
+                self.model = MyCoAtNet(nums_blocks, channels, num_classes=36)
             
             # Load weights
             self._log("Loading model weights...")
-            state_dict = torch.load(model_path, map_location=self.device)
             self.model.load_state_dict(state_dict)
             self.model.to(self.device)
             self.model.eval()
@@ -1054,6 +1163,7 @@ class KeystrokeDetectionUI:
             # Count parameters
             total_params = sum(p.numel() for p in self.model.parameters())
             self._log(f"Model parameters: {total_params:,}")
+            self._log(f"Model type: {model_type}")
             
             # Test model
             with torch.no_grad():
@@ -1062,14 +1172,14 @@ class KeystrokeDetectionUI:
                 self._log(f"Model test output shape: {test_output.shape}")
             
             self.model_loaded = True
-            self.model_status_label.config(text="✓ Model loaded successfully", fg='green')
+            self.model_status_label.config(text=f"✓ {model_type} model loaded successfully", fg='green')
             self.record_btn.config(state=tk.NORMAL)
             self.test_wav_btn.config(state=tk.NORMAL)
             self.bulk_check_btn.config(state=tk.NORMAL)
-            self.status_bar.config(text=f"Model loaded: {os.path.basename(model_path)}")
+            self.status_bar.config(text=f"{model_type} model loaded: {os.path.basename(model_path)}")
             
-            self._log("Model loaded successfully!")
-            messagebox.showinfo("Success", "Model loaded successfully!")
+            self._log(f"{model_type} model loaded successfully!")
+            messagebox.showinfo("Success", f"{model_type} model loaded successfully!")
             
         except Exception as e:
             self._log(f"Failed to load model: {e}", "ERROR")
