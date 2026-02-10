@@ -1,7 +1,7 @@
 {
-    "mic_id": "test",
-    "keyboard_id": "test",
-    "input_device": 1,
+    "mic_id": "dji ",
+    "keyboard_id": "kumara",
+    "input_device": 2,
     "output_device": 6,
     "sample_rate": 44100
 }

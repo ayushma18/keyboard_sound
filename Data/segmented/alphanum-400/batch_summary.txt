@@ -1,0 +1,346 @@
+BATCH SEGMENTATION SUMMARY
+================================================================================
+
+Total sessions: 36
+Processed successfully: 36
+Failed: 0
+Total keystrokes: 14444
+Total saved: 14444
+Total skipped: 0
+Success rate: 100.0%
+
+
+KEY DISTRIBUTION (across all sessions):
+----------------------------------------
+  0         :  400 samples
+  1         :  400 samples
+  2         :  399 samples
+  3         :  400 samples
+  4         :  400 samples
+  5         :  400 samples
+  6         :  400 samples
+  7         :  400 samples
+  8         :  400 samples
+  9         :  400 samples
+  a         :  399 samples
+  b         :  400 samples
+  c         :  400 samples
+  ctrl_l    :    1 samples
+  d         :  400 samples
+  e         :  400 samples
+  f         :  400 samples
+  g         :  400 samples
+  h         :  400 samples
+  i         :  400 samples
+  j         :  400 samples
+  k         :  400 samples
+  l         :  400 samples
+  m         :  400 samples
+  n         :  400 samples
+  o         :  401 samples
+  p         :  399 samples
+  q         :  401 samples
+  r         :  409 samples
+  s         :  400 samples
+  t         :  400 samples
+  u         :  400 samples
+  v         :  400 samples
+  w         :  400 samples
+  x         :  400 samples
+  y         :  425 samples
+  z         :  410 samples
+
+
+SESSION DETAILS:
+================================================================================
+
+Session: 0
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    0: 400
+
+Session: 1
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    1: 400
+
+Session: 2
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    2: 399
+    ctrl_l: 1
+
+Session: 3
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    3: 400
+
+Session: 4
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    4: 400
+
+Session: 5
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    5: 400
+
+Session: 6
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    6: 400
+
+Session: 7
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    7: 400
+
+Session: 8
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    8: 400
+
+Session: 9
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    9: 400
+
+Session: a
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    a: 399
+    q: 1
+
+Session: b
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    b: 400
+
+Session: c
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    c: 400
+
+Session: d
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    d: 400
+
+Session: e
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    e: 400
+
+Session: f
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    f: 400
+
+Session: g
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    g: 400
+
+Session: h
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    h: 400
+
+Session: i
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    i: 400
+
+Session: j
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    j: 400
+
+Session: k
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    k: 400
+
+Session: l
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    l: 400
+
+Session: m
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    m: 400
+
+Session: n
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    n: 400
+
+Session: o
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    o: 400
+
+Session: p
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    o: 1
+    p: 399
+
+Session: q
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    q: 400
+
+Session: r
+  Status: SUCCESS
+  Keystrokes: 409
+  Saved: 409
+  Skipped: 0
+  Keys found:
+    r: 409
+
+Session: s
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    s: 400
+
+Session: t
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    t: 400
+
+Session: u
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    u: 400
+
+Session: v
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    v: 400
+
+Session: w
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    w: 400
+
+Session: x
+  Status: SUCCESS
+  Keystrokes: 400
+  Saved: 400
+  Skipped: 0
+  Keys found:
+    x: 400
+
+Session: y
+  Status: SUCCESS
+  Keystrokes: 425
+  Saved: 425
+  Skipped: 0
+  Keys found:
+    y: 425
+
+Session: z
+  Status: SUCCESS
+  Keystrokes: 410
+  Saved: 410
+  Skipped: 0
+  Keys found:
+    z: 410

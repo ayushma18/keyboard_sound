@@ -50,6 +50,10 @@ class DataCleanupApp:
         # Analysis cache
         self.analysis_cache = {}
         
+        # Session loading control
+        self.is_loading_session = False
+        self.background_analysis_running = False
+        
         # Settings
         self.show_spectrogram = tk.BooleanVar(value=False)
         self.auto_play = tk.BooleanVar(value=False)
@@ -274,6 +278,11 @@ class DataCleanupApp:
         # Session Info
         self.session_info_label = tk.Label(session_frame, text="No session selected", font=("Arial", 9), fg="gray")
         self.session_info_label.pack(pady=5)
+        
+        # Background analysis button
+        self.analyze_all_btn = tk.Button(session_frame, text="🔄 Analyze All Files", command=self.start_background_analysis,
+                                         bg="#FF9800", fg="white", font=("Arial", 9), state=tk.DISABLED)
+        self.analyze_all_btn.pack(pady=5)
         
         # Detection Method
         method_frame = tk.LabelFrame(parent, text="Detection Method", font=("Arial", 10, "bold"), padx=10, pady=10)
@@ -545,41 +554,60 @@ class DataCleanupApp:
 
     def update_detection_method(self):
         """Update when detection method changes"""
-        # Reanalyze if files are loaded
+        # Clear cache to force re-analysis with new method
         if self.audio_files:
-            self.analyze_all_files()
+            self.analysis_cache = {}
+            self.update_stats_display()
             self.load_current_file()
 
     def load_sessions(self):
         """Load all available recording sessions"""
-        self.session_listbox.delete(0, tk.END)
-        self.sessions = []
-        
-        if not os.path.exists(self.base_dir):
-            messagebox.showwarning("Warning", f"Recordings directory '{self.base_dir}' not found!")
+        # Prevent re-entrant calls
+        if self.is_loading_session:
             return
         
-        # Find all session folders (format: micid-keyboardid)
-        for item in os.listdir(self.base_dir):
-            item_path = os.path.join(self.base_dir, item)
-            if os.path.isdir(item_path):
-                # Check if it has audio files
-                has_audio = False
-                for root, dirs, files in os.walk(item_path):
-                    if any(f.endswith('.wav') for f in files):
-                        has_audio = True
-                        break
-                
-                if has_audio:
-                    self.sessions.append(item_path)
-                    # Count files
-                    file_count = sum(1 for r, d, f in os.walk(item_path) for file in f if file.endswith('.wav'))
-                    self.session_listbox.insert(tk.END, f"{item} ({file_count} files)")
+        # Temporarily unbind the selection event to prevent unwanted triggers
+        self.session_listbox.unbind('<<ListboxSelect>>')
         
-        if not self.sessions:
-            self.session_info_label.config(text="No sessions found", fg="orange")
-        else:
-            self.session_info_label.config(text=f"{len(self.sessions)} session(s) found", fg="green")
+        try:
+            self.session_listbox.delete(0, tk.END)
+            self.sessions = []
+            
+            if not os.path.exists(self.base_dir):
+                messagebox.showwarning("Warning", f"Recordings directory '{self.base_dir}' not found!")
+                return
+            
+            # Find all session folders (format: micid-keyboardid)
+            for item in os.listdir(self.base_dir):
+                item_path = os.path.join(self.base_dir, item)
+                if os.path.isdir(item_path):
+                    # Check if it has audio files
+                    has_audio = False
+                    for root, dirs, files in os.walk(item_path):
+                        if any(f.endswith('.wav') for f in files):
+                            has_audio = True
+                            break
+                    
+                    if has_audio:
+                        self.sessions.append(item_path)
+                        # Count files
+                        file_count = sum(1 for r, d, f in os.walk(item_path) for file in f if file.endswith('.wav'))
+                        self.session_listbox.insert(tk.END, f"{item} ({file_count} files)")
+            
+            if not self.sessions:
+                self.session_info_label.config(text="No sessions found", fg="orange")
+            else:
+                self.session_info_label.config(text=f"{len(self.sessions)} session(s) found", fg="green")
+            
+            # Clear any selection that might have been made
+            self.session_listbox.selection_clear(0, tk.END)
+            
+        finally:
+            # Force update to process any pending events before rebinding
+            self.root.update_idletasks()
+            
+            # Rebind the selection event
+            self.session_listbox.bind('<<ListboxSelect>>', self.on_session_select)
 
     def browse_folder(self):
         """Browse for custom recordings folder"""
@@ -590,54 +618,76 @@ class DataCleanupApp:
 
     def on_session_select(self, event):
         """Handle session selection"""
+        # Prevent processing if already loading
+        if self.is_loading_session:
+            return
+        
         selection = self.session_listbox.curselection()
         if not selection:
             return
         
         index = selection[0]
-        self.current_session = self.sessions[index]
+        selected_session = self.sessions[index]
+        
+        # Only load if it's a different session
+        if selected_session == self.current_session:
+            return
+        
+        self.current_session = selected_session
         
         # Load all audio files from this session
         self.load_audio_files()
 
     def load_audio_files(self):
-        """Load all audio files from current session"""
-        if not self.current_session:
+        """Load all audio files from current session (lazy loading - no analysis)"""
+        if not self.current_session or self.is_loading_session:
             return
         
-        self.audio_files = []
-        self.analysis_cache = {}
-        
-        # Walk through session directory and find all WAV files
-        for root, dirs, files in os.walk(self.current_session):
-            for file in files:
-                if file.endswith('.wav'):
-                    file_path = os.path.join(root, file)
-                    self.audio_files.append(file_path)
-        
-        # Sort files
-        self.audio_files.sort()
-        
-        # Load metadata if available
-        self.load_metadata()
-        
-        # Reset state
-        self.current_index = 0
-        self.files_to_delete = set()
-        
-        # Update UI
-        session_name = os.path.basename(self.current_session)
-        self.session_info_label.config(
-            text=f"Session: {session_name} | {len(self.audio_files)} files loaded",
-            fg="green"
-        )
-        
-        # Analyze all files
-        self.analyze_all_files()
-        
-        # Load first file
-        if self.audio_files:
-            self.load_current_file()
+        try:
+            self.is_loading_session = True
+            
+            # Stop any background analysis
+            self.background_analysis_running = False
+            
+            self.audio_files = []
+            self.analysis_cache = {}
+            
+            # Walk through session directory and find all WAV files
+            for root, dirs, files in os.walk(self.current_session):
+                for file in files:
+                    if file.endswith('.wav'):
+                        file_path = os.path.join(root, file)
+                        self.audio_files.append(file_path)
+            
+            # Sort files
+            self.audio_files.sort()
+            
+            # Load metadata if available
+            self.load_metadata()
+            
+            # Reset state
+            self.current_index = 0
+            self.files_to_delete = set()
+            
+            # Update UI
+            session_name = os.path.basename(self.current_session)
+            self.session_info_label.config(
+                text=f"Session: {session_name} | {len(self.audio_files)} files (lazy loading)",
+                fg="green"
+            )
+            
+            # Enable analyze all button
+            self.analyze_all_btn.config(state=tk.NORMAL)
+            
+            # Update stats (empty initially)
+            self.update_stats_display()
+            
+            # Load first file (will analyze on demand)
+            if self.audio_files:
+                self.load_current_file()
+                
+        finally:
+            self.is_loading_session = False
 
     def load_metadata(self):
         """Load metadata.csv if available"""
@@ -658,15 +708,26 @@ class DataCleanupApp:
                 print(f"Error loading metadata: {e}")
 
     def analyze_all_files(self):
-        """Analyze all audio files and cache results"""
+        """Analyze all audio files and cache results (can be interrupted)"""
         if not self.audio_files:
             return
         
         print(f"Analyzing {len(self.audio_files)} files...")
         
         for i, file_path in enumerate(self.audio_files):
+            # Check if we should stop background analysis
+            if not self.background_analysis_running and i > 0:
+                print(f"Background analysis stopped at {i}/{len(self.audio_files)}")
+                break
+            
+            # Skip if already analyzed
+            if file_path in self.analysis_cache:
+                continue
+            
             if i % 100 == 0:
                 print(f"Progress: {i}/{len(self.audio_files)}")
+                # Update UI periodically
+                self.root.after(0, self.update_stats_display)
             
             try:
                 # Read audio file
@@ -698,7 +759,28 @@ class DataCleanupApp:
                 print(f"Error analyzing {file_path}: {e}")
         
         print("Analysis complete!")
-        self.update_stats_display()
+        self.background_analysis_running = False
+        self.root.after(0, self.update_stats_display)
+        self.root.after(0, lambda: self.analyze_all_btn.config(text="✓ Analysis Complete", state=tk.DISABLED))
+
+    def start_background_analysis(self):
+        """Start analyzing all files in background"""
+        if self.background_analysis_running:
+            # Stop background analysis
+            self.background_analysis_running = False
+            self.analyze_all_btn.config(text="🔄 Analyze All Files", bg="#FF9800")
+            return
+        
+        if not self.audio_files:
+            return
+        
+        # Start background analysis
+        self.background_analysis_running = True
+        self.analyze_all_btn.config(text="⏸ Stop Analysis", bg="#F44336")
+        
+        # Run in thread to avoid blocking UI
+        thread = threading.Thread(target=self.analyze_all_files, daemon=True)
+        thread.start()
 
     def load_current_file(self):
         """Load and display current audio file"""
@@ -948,7 +1030,8 @@ class DataCleanupApp:
             self.stats_text.insert(1.0, "No files loaded")
             return
         
-        # Count files by classification
+        # Count analyzed files and classification
+        analyzed = len(self.analysis_cache)
         valid = 0
         noise = 0
         
@@ -961,18 +1044,19 @@ class DataCleanupApp:
         marked = len(self.files_to_delete)
         
         # Calculate percentages
-        valid_pct = (valid / total * 100) if total > 0 else 0
-        noise_pct = (noise / total * 100) if total > 0 else 0
+        analyzed_pct = (analyzed / total * 100) if total > 0 else 0
+        valid_pct = (valid / analyzed * 100) if analyzed > 0 else 0
+        noise_pct = (noise / analyzed * 100) if analyzed > 0 else 0
         marked_pct = (marked / total * 100) if total > 0 else 0
         
-        stats_text = f"""Total Files:       {total}
-Valid Keystrokes:  {valid} ({valid_pct:.1f}%)
-Noise Detected:    {noise} ({noise_pct:.1f}%)
-Marked for Del:    {marked} ({marked_pct:.1f}%)
-
-RMS Threshold:     {self.threshold_value:.5f}
-Conc. Threshold:   {self.concentration_threshold:.2f}
-"""
+        stats_text = f"Total Files:       {total}\n"
+        stats_text += f"Analyzed:          {analyzed} ({analyzed_pct:.1f}%)\n"
+        stats_text += f"Valid Keystrokes:  {valid} ({valid_pct:.1f}%)\n"
+        stats_text += f"Noise Detected:    {noise} ({noise_pct:.1f}%)\n"
+        stats_text += f"Marked for Del:    {marked} ({marked_pct:.1f}%)\n"
+        stats_text += f"\n"
+        stats_text += f"RMS Threshold:     {self.threshold_value:.5f}\n"
+        stats_text += f"Conc. Threshold:   {self.concentration_threshold:.2f}\n"
         
         self.stats_text.delete(1.0, tk.END)
         self.stats_text.insert(1.0, stats_text)
@@ -980,6 +1064,7 @@ Conc. Threshold:   {self.concentration_threshold:.2f}
         # Update stats dict
         self.stats = {
             'total': total,
+            'analyzed': analyzed,
             'above_threshold': valid,
             'below_threshold': noise,
             'marked_for_deletion': marked,
