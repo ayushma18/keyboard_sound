@@ -22,6 +22,7 @@ recordings/metadata.csv
 #venv
 venv
 myenv
+train/
 backups/
 recordings
 model/debug_output/*
