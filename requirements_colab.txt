@@ -3,7 +3,7 @@
 
 # Core ML/Data Science
 torch
-
+torchinfo
 # Audio processing (if needed by your project)
 # Add soundfile, librosa, or other audio libraries here if used
 
