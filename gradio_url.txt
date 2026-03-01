@@ -1,0 +1,10 @@
+Gradio Keyboard Keystroke Detection App
+==================================================
+
+Local URL: http://127.0.0.1:8080
+Port: 8080
+
+Public share link will be displayed in terminal
+
+Model: model/CNN-Final.pkl
+Started: 2026-03-01 22:34:29
