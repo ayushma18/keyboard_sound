@@ -1,0 +1,32 @@
+# Google Colab Compatible Requirements
+# Removed packages that are pre-installed or cause runtime conflicts
+
+# Core ML/Data Science
+torch
+
+# Audio processing (if needed by your project)
+# Add soundfile, librosa, or other audio libraries here if used
+
+# Data handling (if specific versions needed beyond Colab defaults)
+# numpy and matplotlib are pre-installed in Colab
+
+# Utilities that may not be in Colab or need specific versions
+colorama==0.4.6
+
+# Note: The following are already in Colab and should NOT be upgraded:
+# - ipython, ipykernel
+# - jupyter, jupyterlab, notebook
+# - tornado
+# - prompt-toolkit (prompt_toolkit)
+# - pyzmq
+# - numpy
+# - matplotlib
+# - pandas
+# - PIL/pillow
+# - certifi, requests, urllib3
+# - All jupyter-* packages
+# - All nvidia-cuda-* packages (Colab manages CUDA)
+# - debugpy, traitlets
+# - psutil, platformdirs
+# - pygments, pyparsing
+# - six, decorator
