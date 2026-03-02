@@ -1,10 +1,16 @@
-Gradio Keyboard Keystroke Detection App
-==================================================
+⌨️ Keyboard Keystroke Detection - Gradio Interface
+============================================================
 
-Local URL: http://127.0.0.1:8080
-Port: 8080
+Local URL:  http://127.0.0.1:7860
+Port:       7860
+Model:      model\CNN-Final.pkl
 
-Public share link will be displayed in terminal
+Started:    2026-03-02 13:19:17
 
-Model: model/CNN-Final.pkl
-Started: 2026-03-01 22:34:29
+============================================================
+
+Instructions:
+1. Open the URL in your browser
+2. Click the microphone icon to record
+3. Press a key on your keyboard
+4. Click 'Analyze Keystroke' to get prediction
