@@ -252,73 +252,77 @@ class MyCoAtNet(nn.Sequential):
 # CNN MODEL (from CNN.ipynb)
 # ============================================================================
 
+class ConvBlock(nn.Module):
+    """Convolutional block with double conv layers, batch norm, and ReLU"""
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=kernel_size, stride=1, padding=padding),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x):
+        return self.conv(x)
+
+
 class CNN(nn.Module):
-    """Simple CNN model from CNN.ipynb for keystroke classification"""
+    """CNN model from CNN.ipynb for keystroke classification"""
     def __init__(self, num_classes=36):
         super().__init__()
-        
-        # Block 1: Conv2D 1->64
-        self.conv1 = nn.Conv2d(1, 64, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(64)
+
+        self.conv1 = ConvBlock(1, 64)
         self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
         self.dropout1 = nn.Dropout2d(0.25)
-        
-        # Block 2: Conv2D 64->128
-        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(128)
+
+        self.conv2 = ConvBlock(64, 128)
         self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
         self.dropout2 = nn.Dropout2d(0.25)
-        
-        # Block 3: Conv2D 128->256
-        self.conv3 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm2d(256)
+
+        self.conv3 = ConvBlock(128, 256)
         self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.dropout3 = nn.Dropout2d(0.25)
-        
-        # Global Average Pooling
+        self.dropout3 = nn.Dropout2d(0.3)
+
+        self.conv4 = ConvBlock(256, 512)
+        self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.dropout4 = nn.Dropout2d(0.3)
+
         self.global_pool = nn.AdaptiveAvgPool2d(1)
-        
-        # Dense layers
-        self.fc1 = nn.Linear(256, 128)
-        self.bn4 = nn.BatchNorm1d(128)
-        self.dropout4 = nn.Dropout(0.5)
-        
-        self.fc2 = nn.Linear(128, num_classes)
-    
+
+        self.fc = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(512, 256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+            nn.Linear(256, 128),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+            nn.Linear(128, num_classes)
+        )
+
     def forward(self, x):
-        # Block 1
         x = self.conv1(x)
-        x = self.bn1(x)
-        x = F.relu(x)
         x = self.pool1(x)
         x = self.dropout1(x)
-        
-        # Block 2
+
         x = self.conv2(x)
-        x = self.bn2(x)
-        x = F.relu(x)
         x = self.pool2(x)
         x = self.dropout2(x)
-        
-        # Block 3
+
         x = self.conv3(x)
-        x = self.bn3(x)
-        x = F.relu(x)
         x = self.pool3(x)
         x = self.dropout3(x)
-        
-        # Global pooling and flatten
-        x = self.global_pool(x)
-        x = x.view(x.size(0), -1)
-        
-        # Dense layers
-        x = self.fc1(x)
-        x = self.bn4(x)
-        x = F.relu(x)
+
+        x = self.conv4(x)
+        x = self.pool4(x)
         x = self.dropout4(x)
-        
-        x = self.fc2(x)
-        
+
+        x = self.global_pool(x)
+        x = self.fc(x)
+
         return x
 
 
@@ -1105,10 +1109,25 @@ class KeystrokeDetectionUI:
         """Detect model type and num_classes from state_dict keys"""
         keys = list(state_dict.keys())
         
-        # Check for CNN model keys (simple CNN architecture)
-        cnn_keys = ['conv1.weight', 'conv2.weight', 'conv3.weight', 'fc1.weight', 'fc2.weight']
-        if any(key in keys for key in cnn_keys):
-            self._log(f"Detected CNN keys: {[k for k in cnn_keys if k in keys]}")
+        # Check for new CNN model keys (ConvBlock architecture with Sequential fc)
+        new_cnn_keys = ['conv1.conv.0.weight', 'conv2.conv.0.weight', 'fc.7.weight']
+        if any(key in keys for key in new_cnn_keys):
+            self._log(f"Detected new CNN (ConvBlock) keys: {[k for k in new_cnn_keys if k in keys]}")
+            # Detect number of classes from final layer (fc.7.weight or fc.7.bias)
+            if 'fc.7.weight' in state_dict:
+                num_classes = state_dict['fc.7.weight'].shape[0]
+                self._log(f"Detected {num_classes} classes from fc.7.weight shape")
+                return 'CNN', num_classes
+            elif 'fc.7.bias' in state_dict:
+                num_classes = state_dict['fc.7.bias'].shape[0]
+                self._log(f"Detected {num_classes} classes from fc.7.bias shape")
+                return 'CNN', num_classes
+            return 'CNN', 36  # Default
+        
+        # Check for old CNN model keys (simple CNN architecture) - for backward compatibility
+        old_cnn_keys = ['conv1.weight', 'conv2.weight', 'conv3.weight', 'fc1.weight', 'fc2.weight']
+        if any(key in keys for key in old_cnn_keys):
+            self._log(f"Detected old CNN keys: {[k for k in old_cnn_keys if k in keys]}")
             # Detect number of classes from final layer
             if 'fc2.weight' in state_dict:
                 num_classes = state_dict['fc2.weight'].shape[0]
@@ -1174,7 +1193,15 @@ class KeystrokeDetectionUI:
             
             # Update key labels based on number of classes
             self.num_classes = num_classes
-            if num_classes == 26:
+            if num_classes == 10:
+                # Digits only (0-9)
+                self.key_labels = [str(digit) for digit in range(10)]
+                self._log("Using digit-only labels (0-9)")
+            elif num_classes == 9:
+                # Digits only (0-8) - some datasets may exclude 9
+                self.key_labels = [str(digit) for digit in range(9)]
+                self._log("Using digit-only labels (0-8)")
+            elif num_classes == 26:
                 self.key_labels = self.alphabet_only
                 self._log("Using alphabet-only labels (a-z)")
             elif num_classes == 36:
@@ -1182,7 +1209,18 @@ class KeystrokeDetectionUI:
                 self.key_labels = digits + self.alphabet_only
                 self._log("Using alphanumeric labels (0-9, a-z)")
             else:
-                self._log(f"Warning: Unusual number of classes ({num_classes}), using default labels", "WARNING")
+                # For any other number, try to use what makes sense
+                if num_classes <= 10:
+                    self.key_labels = [str(digit) for digit in range(num_classes)]
+                    self._log(f"Using {num_classes} digit labels (0-{num_classes-1})")
+                elif num_classes <= 26:
+                    self.key_labels = self.alphabet_only[:num_classes]
+                    self._log(f"Using first {num_classes} alphabet labels")
+                else:
+                    digits = [str(digit) for digit in range(10)]
+                    remaining = num_classes - 10
+                    self.key_labels = digits + self.alphabet_only[:remaining]
+                    self._log(f"Warning: Unusual number of classes ({num_classes}), using best guess labels", "WARNING")
             
             # Count parameters
             total_params = sum(p.numel() for p in self.model.parameters())

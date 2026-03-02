@@ -15,6 +15,7 @@ Thumbs.db
 recordings/*.wav
 recordings/metadata.csv
 detection_debug
+Data/combined
 
 # Env
 .env
