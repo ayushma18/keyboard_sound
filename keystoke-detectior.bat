@@ -28,7 +28,7 @@ if errorlevel 1 (
 REM Run the application
 echo Starting application...
 echo.
-python keystroke_detector_ui.py
+python inference\keystroke_detector_ui.py
 
 REM Deactivate when done
 deactivate

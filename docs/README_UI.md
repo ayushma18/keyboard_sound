@@ -57,7 +57,17 @@ Alternatively, you can browse for any model file using the UI.
 ### Running the Application
 
 ```powershell
-python keystroke_detector_ui.py
+python inference/keystroke_detector_ui.py
+```
+
+Or use the provided launcher script:
+
+```bash
+# Windows
+keystoke-detectior.bat
+
+# Linux/Mac
+bash run.sh
 ```
 
 ### Using the UI
@@ -137,10 +147,15 @@ The system uses CoAtNet-1 architecture with:
    - Background processing thread
    - Queue-based audio chunk handling
 
-4. **keystroke_detector_ui.py**
+4. **inference/keystroke_detector_ui.py**
    - Main UI application using tkinter
    - Threading for non-blocking audio processing
    - Real-time result visualization
+
+5. **inference/app_gradio.py**
+   - Gradio web interface for keystroke detection
+   - Integrated with CNN.ipynb for easy testing
+   - Supports file upload and real-time recording
 
 ### Performance
 
