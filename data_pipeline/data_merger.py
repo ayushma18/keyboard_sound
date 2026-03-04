@@ -1,468 +1,766 @@
 """
-Data merger module - merges multiple segmented datasets into one.
+Data merger - smart per-key balanced sampling + distribution visualisation.
 
-This module allows combining multiple segmented keystroke datasets while:
-- Maintaining proper ordering within each key category
-- Preserving audio quality
-- Creating merged summary statistics
-- Handling duplicate handling and validation
+New features
+------------
+* Key selection  - choose which keys (a-z / 0-9) to include.
+* Dataset analysis table - shows per-key WAV counts for every source dataset.
+* Sampling strategy
+    - Max samples slider/spinbox (0-300, 0 = unlimited).
+    - Balance mode: for each key cap all datasets at the minimum non-zero count
+      across them so no single dataset dominates (removes sample bias).
+* Distribution visualisation - inline bar chart + statistics panel,
+  updated after every Analyze or Merge.
 """
 import os
 import shutil
+import threading
 from datetime import datetime
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-import threading
 from collections import defaultdict
 
+ALL_ALPHA = list("abcdefghijklmnopqrstuvwxyz")
+ALL_NUM   = list("0123456789")
+ALL_KEYS  = ALL_ALPHA + ALL_NUM
+
+
+# ---------------------------------------------------------------------------
+# Lightweight canvas bar-chart (no matplotlib dependency)
+# ---------------------------------------------------------------------------
+
+class BarChart(tk.Canvas):
+    """Draw a horizontal bar chart directly on a tk.Canvas."""
+    BAR_COLOR  = "#1976D2"
+    ZERO_COLOR = "#BDBDBD"
+    TEXT_COLOR = "#212121"
+    LABEL_W    = 28
+    BAR_H      = 16
+    BAR_GAP    = 4
+    PAD_X      = 10
+    PAD_Y      = 10
+
+    def draw(self, distribution: Dict[str, int]):
+        self.delete("all")
+        if not distribution:
+            self.create_text(10, 10, text="No data", anchor="nw", fill="#999")
+            return
+        keys   = sorted(distribution.keys())
+        counts = [distribution[k] for k in keys]
+        max_c  = max(counts) if counts else 1
+        w      = int(self.cget("width"))
+        usable = max(10, w - self.LABEL_W - 50 - self.PAD_X * 2)
+        total_h = self.PAD_Y * 2 + len(keys) * (self.BAR_H + self.BAR_GAP)
+        self.config(height=max(total_h, 60))
+        for i, (key, count) in enumerate(zip(keys, counts)):
+            y     = self.PAD_Y + i * (self.BAR_H + self.BAR_GAP)
+            bw    = int((count / max_c) * usable) if max_c else 0
+            x_bar = self.PAD_X + self.LABEL_W
+            self.create_text(x_bar - 4, y + self.BAR_H // 2,
+                             text=key, anchor="e",
+                             font=("Courier", 8, "bold"), fill=self.TEXT_COLOR)
+            color = self.BAR_COLOR if count > 0 else self.ZERO_COLOR
+            self.create_rectangle(x_bar, y, x_bar + max(bw, 2),
+                                  y + self.BAR_H, fill=color, outline="")
+            self.create_text(x_bar + bw + 4, y + self.BAR_H // 2,
+                             text=str(count), anchor="w",
+                             font=("Courier", 8), fill=self.TEXT_COLOR)
+
+
+# ---------------------------------------------------------------------------
+# Main merger tab
+# ---------------------------------------------------------------------------
 
 class DataMergerTab:
-    """Tab for merging multiple segmented datasets."""
-    
+    """Merge multiple segmented datasets with key selection and balanced sampling."""
+
     def __init__(self, parent, config, audio_handler):
-        self.parent = parent
-        self.config = config
-        self.audio = audio_handler
-        
-        self.selected_datasets = []
+        self.parent   = parent
+        self.config   = config
+        self.audio    = audio_handler
+        self.selected_datasets: List[str] = []
         self.is_merging = False
-        
+        # Per-dataset WAV-count cache: {dataset_path: {key: count}}
+        self._analysis_cache: Dict[str, Dict[str, int]] = {}
         self.build_ui()
-    
+
+    # -----------------------------------------------------------------------
+    # UI BUILD
+    # -----------------------------------------------------------------------
+
     def build_ui(self):
-        """Build the data merger UI."""
-        # Create canvas with scrollbar
-        canvas = tk.Canvas(self.parent)
-        scrollbar = tk.Scrollbar(self.parent, orient="vertical", command=canvas.yview)
-        scrollable_frame = tk.Frame(canvas)
-        
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        scrollbar.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-        
-        # Enable mouse wheel scrolling
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        
-        main_frame = tk.Frame(scrollable_frame, padx=20, pady=20)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Title
-        title = tk.Label(main_frame, text="Dataset Merger",
-                        font=("Arial", 16, "bold"), fg="#1976D2")
-        title.pack(pady=(0, 20))
-        
-        # Instructions
-        instructions = tk.Label(main_frame, 
-                               text="Select multiple segmented datasets to merge them into a single unified dataset.\n"
-                                    "Files will be properly ordered and statistics will be combined.",
-                               font=("Arial", 9), fg="#666", justify=tk.LEFT)
-        instructions.pack(pady=(0, 15))
-        
-        # Dataset selection
-        select_frame = tk.LabelFrame(main_frame, text="1. Select Datasets to Merge",
-                                    font=("Arial", 10, "bold"), padx=15, pady=15)
-        select_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
-        
-        btn_row = tk.Frame(select_frame)
-        btn_row.pack(fill=tk.X, pady=5)
-        
-        tk.Button(btn_row, text="Add Dataset", command=self.add_dataset,
-                 bg="#2196F3", fg="white", font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=5)
-        
-        tk.Button(btn_row, text="Clear All", command=self.clear_datasets,
-                 bg="#FF5722", fg="white", font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=5)
-        
-        # Dataset list with scrollbar
-        list_frame = tk.Frame(select_frame)
-        list_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-        
-        scrollbar = tk.Scrollbar(list_frame)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        self.dataset_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set,
-                                         font=("Courier", 9), height=8)
+        oc = tk.Canvas(self.parent)
+        vsb = tk.Scrollbar(self.parent, orient="vertical", command=oc.yview)
+        sf  = tk.Frame(oc)
+        sf.bind("<Configure>",
+                lambda e: oc.configure(scrollregion=oc.bbox("all")))
+        oc.create_window((0, 0), window=sf, anchor="nw")
+        oc.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        oc.pack(side="left", fill="both", expand=True)
+        oc.bind_all("<MouseWheel>",
+                    lambda e: oc.yview_scroll(int(-1*(e.delta/120)), "units"))
+
+        main = tk.Frame(sf, padx=20, pady=20)
+        main.pack(fill=tk.BOTH, expand=True)
+
+        tk.Label(main, text="Dataset Merger",
+                 font=("Arial", 16, "bold"), fg="#1976D2").pack(pady=(0, 5))
+        tk.Label(main,
+                 text="Select datasets  ->  choose keys  ->  set limits  ->  analyze  ->  merge",
+                 font=("Arial", 9), fg="#666").pack(pady=(0, 15))
+
+        self._build_sec_datasets(main)
+        self._build_sec_keys(main)
+        self._build_sec_sampling(main)
+        self._build_sec_analyze(main)
+        self._build_sec_merge(main)
+        self._build_sec_distribution(main)
+
+    # -- Section 1: datasets -------------------------------------------------
+
+    def _build_sec_datasets(self, p):
+        fr = tk.LabelFrame(p, text="1. Select Datasets to Merge",
+                           font=("Arial", 10, "bold"), padx=15, pady=15)
+        fr.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+        br = tk.Frame(fr)
+        br.pack(fill=tk.X, pady=5)
+        tk.Button(br, text="Add Dataset", command=self.add_dataset,
+                  bg="#2196F3", fg="white",
+                  font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=5)
+        tk.Button(br, text="Remove Selected", command=self.remove_selected_dataset,
+                  font=("Arial", 9)).pack(side=tk.LEFT, padx=5)
+        tk.Button(br, text="Clear All", command=self.clear_datasets,
+                  bg="#FF5722", fg="white",
+                  font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=5)
+        lf = tk.Frame(fr)
+        lf.pack(fill=tk.BOTH, expand=True, pady=5)
+        sb = tk.Scrollbar(lf)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.dataset_listbox = tk.Listbox(lf, yscrollcommand=sb.set,
+                                          font=("Courier", 9), height=6,
+                                          selectmode=tk.EXTENDED)
         self.dataset_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.config(command=self.dataset_listbox.yview)
-        
-        remove_btn_row = tk.Frame(select_frame)
-        remove_btn_row.pack(fill=tk.X, pady=5)
-        
-        tk.Button(remove_btn_row, text="Remove Selected", command=self.remove_selected_dataset,
-                 font=("Arial", 9)).pack(side=tk.LEFT, padx=5)
-        
-        self.dataset_count_label = tk.Label(select_frame, text="0 datasets selected",
-                                           font=("Arial", 9, "bold"), fg="#1976D2")
-        self.dataset_count_label.pack(pady=5)
-        
-        # Output configuration
-        output_frame = tk.LabelFrame(main_frame, text="2. Output Configuration",
-                                    font=("Arial", 10, "bold"), padx=15, pady=15)
-        output_frame.pack(fill=tk.X, pady=(0, 15))
-        
-        out_row = tk.Frame(output_frame)
-        out_row.pack(fill=tk.X, pady=5)
-        tk.Label(out_row, text="Merged Dataset Name:", width=20, anchor=tk.W).pack(side=tk.LEFT, padx=5)
-        self.output_name_var = tk.StringVar(value=f"merged_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-        tk.Entry(out_row, textvariable=self.output_name_var, width=40).pack(side=tk.LEFT, padx=5)
-        
-        # Options
-        tk.Label(output_frame, text="Merge Options:", font=("Arial", 9, "bold")).pack(anchor=tk.W, pady=(10, 5))
-        
-        self.preserve_order_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(output_frame, text="Preserve chronological order within each key",
-                      variable=self.preserve_order_var,
-                      font=("Arial", 9)).pack(anchor=tk.W, padx=20)
-        
+        sb.config(command=self.dataset_listbox.yview)
+        self.dataset_count_label = tk.Label(fr, text="0 datasets selected",
+                                            font=("Arial", 9, "bold"), fg="#1976D2")
+        self.dataset_count_label.pack(pady=3)
+
+    # -- Section 2: key selection --------------------------------------------
+
+    def _build_sec_keys(self, p):
+        fr = tk.LabelFrame(p, text="2. Select Keys to Include in Final Dataset",
+                           font=("Arial", 10, "bold"), padx=15, pady=15)
+        fr.pack(fill=tk.X, pady=(0, 15))
+        qs = tk.Frame(fr)
+        qs.pack(fill=tk.X, pady=(0, 8))
+        for lbl, fn in [("All",          lambda: self._key_set_all(True)),
+                        ("None",         lambda: self._key_set_all(False)),
+                        ("Alpha only",   lambda: self._key_set_group("alpha")),
+                        ("Numeric only", lambda: self._key_set_group("num"))]:
+            tk.Button(qs, text=lbl, command=fn,
+                      font=("Arial", 8), width=12).pack(side=tk.LEFT, padx=2)
+        self._key_vars: Dict[str, tk.BooleanVar] = {}
+        af = tk.LabelFrame(fr, text="Letters  (a-z)", font=("Arial", 8))
+        af.pack(fill=tk.X, pady=3)
+        for i, k in enumerate(ALL_ALPHA):
+            v = tk.BooleanVar(value=True)
+            self._key_vars[k] = v
+            tk.Checkbutton(af, text=k, variable=v,
+                           font=("Courier", 9), width=3).grid(
+                               row=i//13, column=i%13, sticky="w", padx=2)
+        nf = tk.LabelFrame(fr, text="Digits  (0-9)", font=("Arial", 8))
+        nf.pack(fill=tk.X, pady=3)
+        for i, k in enumerate(ALL_NUM):
+            v = tk.BooleanVar(value=True)
+            self._key_vars[k] = v
+            tk.Checkbutton(nf, text=k, variable=v,
+                           font=("Courier", 9), width=3).grid(
+                               row=0, column=i, sticky="w", padx=2)
+
+    # -- Section 3: sampling strategy ----------------------------------------
+
+    def _build_sec_sampling(self, p):
+        fr = tk.LabelFrame(p,
+                           text="3. Sampling Strategy  (per key, per dataset)",
+                           font=("Arial", 10, "bold"), padx=15, pady=15)
+        fr.pack(fill=tk.X, pady=(0, 15))
+        mr = tk.Frame(fr)
+        mr.pack(fill=tk.X, pady=5)
+        tk.Label(mr, text="Max samples per key per dataset:",
+                 font=("Arial", 9), width=32, anchor=tk.W).pack(side=tk.LEFT)
+        self.max_samples_var = tk.IntVar(value=300)
+        tk.Scale(mr, from_=0, to=300, orient=tk.HORIZONTAL,
+                 variable=self.max_samples_var,
+                 length=200, showvalue=False).pack(side=tk.LEFT, padx=5)
+        sp = tk.Spinbox(mr, from_=0, to=300,
+                        textvariable=self.max_samples_var,
+                        width=5, font=("Arial", 10),
+                        command=self._sync_slider)
+        sp.pack(side=tk.LEFT, padx=5)
+        sp.bind("<FocusOut>", lambda e: self._sync_slider())
+        tk.Label(mr, text="(0 = unlimited)",
+                 font=("Arial", 8), fg="#888").pack(side=tk.LEFT)
+        self.balance_var = tk.BooleanVar(value=True)
+        bal_text = (
+            "Balance datasets  --  for each key, cap at the minimum sample count\n"
+            "     across all datasets  (e.g. datasets have 300 and 100 for key 'a'\n"
+            "     -> take 100 from each; no single dataset dominates the final merge)"
+        )
+        tk.Checkbutton(fr, text=bal_text,
+                       variable=self.balance_var,
+                       font=("Arial", 9), justify=tk.LEFT,
+                       anchor="w").pack(anchor=tk.W, padx=20, pady=5)
+        self.strategy_label = tk.Label(fr, text="",
+                                       font=("Arial", 8, "italic"), fg="#555")
+        self.strategy_label.pack(anchor=tk.W, padx=20)
+        self.max_samples_var.trace_add("write",
+                                       lambda *_: self._update_strategy_label())
+        self.balance_var.trace_add("write",
+                                   lambda *_: self._update_strategy_label())
+        self._update_strategy_label()
+
+    # -- Section 4: analyze --------------------------------------------------
+
+    def _build_sec_analyze(self, p):
+        fr = tk.LabelFrame(p,
+                           text="4. Analyze Datasets  (per-key sample counts)",
+                           font=("Arial", 10, "bold"), padx=15, pady=15)
+        fr.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+        br = tk.Frame(fr)
+        br.pack(fill=tk.X, pady=5)
+        self.analyze_btn = tk.Button(br, text="Analyze Selected Datasets",
+                                     command=self.analyze_datasets,
+                                     bg="#7B1FA2", fg="white",
+                                     font=("Arial", 10, "bold"),
+                                     state=tk.DISABLED)
+        self.analyze_btn.pack(side=tk.LEFT, padx=5)
+        self.analyze_status = tk.Label(br,
+                                       text="Add >= 1 dataset to enable analysis.",
+                                       font=("Arial", 9), fg="#666")
+        self.analyze_status.pack(side=tk.LEFT, padx=15)
+        tf = tk.Frame(fr)
+        tf.pack(fill=tk.BOTH, expand=True, pady=5)
+        txsb = tk.Scrollbar(tf, orient=tk.HORIZONTAL)
+        txsb.pack(side=tk.BOTTOM, fill=tk.X)
+        tysb = tk.Scrollbar(tf, orient=tk.VERTICAL)
+        tysb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.analysis_tree = ttk.Treeview(tf, show="headings", height=12,
+                                          xscrollcommand=txsb.set,
+                                          yscrollcommand=tysb.set)
+        self.analysis_tree.pack(fill=tk.BOTH, expand=True)
+        txsb.config(command=self.analysis_tree.xview)
+        tysb.config(command=self.analysis_tree.yview)
+        # Row colour tags
+        self.analysis_tree.tag_configure("zero",    background="#FFEBEE")  # red
+        self.analysis_tree.tag_configure("limited", background="#FFF8E1")  # amber
+        self.analysis_tree.tag_configure("ok",      background="#E8F5E9")  # green
+
+    # -- Section 5: output & merge -------------------------------------------
+
+    def _build_sec_merge(self, p):
+        fr = tk.LabelFrame(p, text="5. Output & Merge",
+                           font=("Arial", 10, "bold"), padx=15, pady=15)
+        fr.pack(fill=tk.X, pady=(0, 15))
+        or_ = tk.Frame(fr)
+        or_.pack(fill=tk.X, pady=5)
+        tk.Label(or_, text="Merged Dataset Name:",
+                 width=22, anchor=tk.W).pack(side=tk.LEFT)
+        self.output_name_var = tk.StringVar(
+            value=f"merged_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+        tk.Entry(or_, textvariable=self.output_name_var,
+                 width=40).pack(side=tk.LEFT, padx=5)
         self.create_summary_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(output_frame, text="Create merged summary report",
-                      variable=self.create_summary_var,
-                      font=("Arial", 9)).pack(anchor=tk.W, padx=20)
-        
-        # Processing controls
-        process_frame = tk.LabelFrame(main_frame, text="3. Merge Datasets",
-                                     font=("Arial", 10, "bold"), padx=15, pady=15)
-        process_frame.pack(fill=tk.X, pady=(0, 15))
-        
+        tk.Checkbutton(fr,
+                       text="Write merge_summary.txt into output folder",
+                       variable=self.create_summary_var,
+                       font=("Arial", 9)).pack(anchor=tk.W, padx=20, pady=5)
         self.progress_var = tk.DoubleVar()
-        self.progress_bar = ttk.Progressbar(process_frame, variable=self.progress_var,
-                                           maximum=100, length=400)
-        self.progress_bar.pack(pady=10)
-        
-        self.progress_label = tk.Label(process_frame, text="Ready - Select datasets to begin",
+        self.progress_bar = ttk.Progressbar(fr, variable=self.progress_var,
+                                            maximum=100, length=500)
+        self.progress_bar.pack(pady=8, fill=tk.X)
+        self.progress_label = tk.Label(fr,
+                                       text="Ready - add datasets and click Analyze first.",
                                        font=("Arial", 10), fg="#424242")
-        self.progress_label.pack(pady=5)
-        
-        btn_row2 = tk.Frame(process_frame)
-        btn_row2.pack(pady=10)
-        
-        self.merge_btn = tk.Button(btn_row2, text="Start Merge",
+        self.progress_label.pack(pady=3)
+        self.merge_btn = tk.Button(fr, text="Start Merge",
                                    command=self.start_merge,
                                    bg="#4CAF50", fg="white",
-                                   font=("Arial", 11, "bold"),
-                                   width=18, height=2,
-                                   state=tk.DISABLED)
-        self.merge_btn.pack(side=tk.LEFT, padx=10)
-        
-        # Results
-        results_frame = tk.LabelFrame(main_frame, text="Results",
-                                     font=("Arial", 10, "bold"), padx=15, pady=15)
-        results_frame.pack(fill=tk.BOTH, expand=True)
-        
-        results_scroll = tk.Scrollbar(results_frame)
-        results_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        self.results_text = tk.Text(results_frame, height=6, font=("Courier", 9),
-                                   yscrollcommand=results_scroll.set)
+                                   font=("Arial", 12, "bold"),
+                                   height=2, state=tk.DISABLED)
+        self.merge_btn.pack(pady=8)
+        rf = tk.LabelFrame(fr, text="Merge Log", font=("Arial", 9, "bold"))
+        rf.pack(fill=tk.BOTH, expand=True, pady=5)
+        rsb = tk.Scrollbar(rf)
+        rsb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.results_text = tk.Text(rf, height=8, font=("Courier", 8),
+                                    yscrollcommand=rsb.set)
         self.results_text.pack(fill=tk.BOTH, expand=True)
-        results_scroll.config(command=self.results_text.yview)
-    
+        rsb.config(command=self.results_text.yview)
+
+    # -- Section 6: distribution chart ---------------------------------------
+
+    def _build_sec_distribution(self, p):
+        fr = tk.LabelFrame(p, text="6. Final Dataset Distribution",
+                           font=("Arial", 10, "bold"), padx=15, pady=15)
+        fr.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+        tk.Label(fr, text="Updated after every Analyze or Merge.",
+                 font=("Arial", 8), fg="#888").pack(anchor=tk.W)
+        cc = tk.Frame(fr)
+        cc.pack(fill=tk.BOTH, expand=True)
+        cvsb = tk.Scrollbar(cc, orient=tk.VERTICAL)
+        cvsb.pack(side=tk.RIGHT, fill=tk.Y)
+        csc = tk.Canvas(cc, bg="white", height=320, yscrollcommand=cvsb.set)
+        csc.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        cvsb.config(command=csc.yview)
+        self._chart_inner = tk.Frame(csc, bg="white")
+        csc.create_window((0, 0), window=self._chart_inner, anchor="nw")
+        self._chart_inner.bind(
+            "<Configure>",
+            lambda e: csc.configure(scrollregion=csc.bbox("all")))
+        self.bar_chart = BarChart(self._chart_inner,
+                                  bg="white", width=700, height=60)
+        self.bar_chart.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        sf2 = tk.LabelFrame(fr, text="Statistics", font=("Arial", 9, "bold"))
+        sf2.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+        ssb = tk.Scrollbar(sf2)
+        ssb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.dist_summary = tk.Text(sf2, height=6, font=("Courier", 8),
+                                    yscrollcommand=ssb.set, state=tk.DISABLED)
+        self.dist_summary.pack(fill=tk.BOTH, expand=True)
+        ssb.config(command=self.dist_summary.yview)
+
+    # -----------------------------------------------------------------------
+    # HELPERS / CALLBACKS
+    # -----------------------------------------------------------------------
+
+    def _key_set_all(self, value: bool):
+        for v in self._key_vars.values():
+            v.set(value)
+
+    def _key_set_group(self, group: str):
+        self._key_set_all(False)
+        for k in (ALL_ALPHA if group == "alpha" else ALL_NUM):
+            self._key_vars[k].set(True)
+
+    def _sync_slider(self):
+        try:
+            val = max(0, min(300, int(self.max_samples_var.get())))
+            self.max_samples_var.set(val)
+        except ValueError:
+            pass
+
+    def _update_strategy_label(self):
+        mx  = self.max_samples_var.get()
+        bal = self.balance_var.get()
+        cap = "take all available" if mx == 0 else f"cap at {mx} per key/dataset"
+        eq  = "; equalise at per-key minimum across datasets" if bal else ""
+        self.strategy_label.config(text=f"Strategy: {cap}{eq}.")
+
+    def _selected_keys(self) -> List[str]:
+        return [k for k in ALL_KEYS if self._key_vars[k].get()]
+
+    def _get_counts(self, ds_path: str, keys: List[str]) -> Dict[str, int]:
+        """Return {key: wav_count} for the given dataset (cached)."""
+        if ds_path in self._analysis_cache:
+            return self._analysis_cache[ds_path]
+        result: Dict[str, int] = {}
+        for k in keys:
+            folder = os.path.join(ds_path, k)
+            try:
+                result[k] = (
+                    sum(1 for f in os.listdir(folder) if f.endswith(".wav"))
+                    if os.path.isdir(folder) else 0)
+            except Exception:
+                result[k] = 0
+        self._analysis_cache[ds_path] = result
+        return result
+
+    def _compute_takes(self, raw_counts: List[int],
+                       max_cap: int, balance: bool) -> List[int]:
+        """
+        Compute how many samples to take from each dataset for one key.
+
+        Rules
+        -----
+        1. Clamp every count at max_cap (0 = unlimited).
+        2. If balance=True, find the minimum non-zero clamped value and
+           reduce all non-zero entries to that value.
+           (Datasets with 0 contribute 0 and are not considered.)
+        Returns a list aligned with self.selected_datasets.
+        """
+        avail = [min(c, max_cap) if max_cap > 0 else c for c in raw_counts]
+        if balance:
+            non_zero = [v for v in avail if v > 0]
+            if non_zero:
+                min_count = min(non_zero)
+                avail = [min_count if v > 0 else 0 for v in avail]
+        return avail
+
+    # -----------------------------------------------------------------------
+    # DATASET MANAGEMENT
+    # -----------------------------------------------------------------------
+
     def add_dataset(self):
-        """Add a dataset to the merge list."""
         folder = filedialog.askdirectory(
             title="Select Segmented Dataset Folder",
-            initialdir=os.path.join(os.getcwd(), "recordings", "segmented")
-        )
-        
+            initialdir=os.path.join(os.getcwd(), "recordings", "segmented"))
         if not folder:
             return
-        
-        # Validate that this is a segmented dataset
-        if not self.validate_dataset(folder):
-            messagebox.showerror("Invalid Dataset", 
-                               "Selected folder does not appear to be a valid segmented dataset.\n\n"
-                               "Expected structure: folders for each key (a-z, 0-9) containing .wav files")
+        if not self._validate_dataset(folder):
+            messagebox.showerror("Invalid Dataset",
+                                 "No recognised key sub-folders with .wav files found.")
             return
-        
-        # Check for duplicates
         if folder in self.selected_datasets:
             messagebox.showwarning("Duplicate", "This dataset is already in the list.")
             return
-        
-        # Add to list
         self.selected_datasets.append(folder)
         self.dataset_listbox.insert(tk.END, os.path.basename(folder))
-        
-        # Update UI
-        self.update_dataset_count()
-        
-    def validate_dataset(self, folder: str) -> bool:
-        """Validate that a folder is a valid segmented dataset."""
-        # Check if folder exists
+        self._analysis_cache.pop(folder, None)
+        self._update_ui_state()
+
+    def _validate_dataset(self, folder: str) -> bool:
         if not os.path.isdir(folder):
             return False
-        
-        # Look for at least one valid key folder with wav files
-        valid_keys = set('abcdefghijklmnopqrstuvwxyz0123456789')
-        found_valid = False
-        
+        valid_keys = set(ALL_KEYS)
         for item in os.listdir(folder):
             item_path = os.path.join(folder, item)
             if os.path.isdir(item_path) and item in valid_keys:
-                # Check if this folder contains .wav files
                 try:
-                    files = os.listdir(item_path)
-                    if any(f.endswith('.wav') for f in files):
-                        found_valid = True
-                        break
-                except:
+                    if any(f.endswith(".wav") for f in os.listdir(item_path)):
+                        return True
+                except Exception:
                     pass
-        
-        return found_valid
-    
+        return False
+
     def remove_selected_dataset(self):
-        """Remove selected dataset from the list."""
         selection = self.dataset_listbox.curselection()
         if not selection:
             return
-        
-        index = selection[0]
-        self.dataset_listbox.delete(index)
-        self.selected_datasets.pop(index)
-        
-        self.update_dataset_count()
-    
+        for index in reversed(selection):
+            self._analysis_cache.pop(self.selected_datasets[index], None)
+            self.dataset_listbox.delete(index)
+            self.selected_datasets.pop(index)
+        self._update_ui_state()
+
     def clear_datasets(self):
-        """Clear all selected datasets."""
         self.dataset_listbox.delete(0, tk.END)
         self.selected_datasets.clear()
-        self.update_dataset_count()
-    
-    def update_dataset_count(self):
-        """Update the dataset count label."""
-        count = len(self.selected_datasets)
-        self.dataset_count_label.config(text=f"{count} dataset{'s' if count != 1 else ''} selected")
-        
-        # Enable/disable merge button
-        if count >= 2:
-            self.merge_btn.config(state=tk.NORMAL)
-            self.progress_label.config(text=f"Ready to merge {count} datasets")
-        else:
-            self.merge_btn.config(state=tk.DISABLED)
-            if count == 0:
-                self.progress_label.config(text="Ready - Select datasets to begin")
-            else:
-                self.progress_label.config(text="Select at least 2 datasets to merge")
-    
-    def start_merge(self):
-        """Start the merge process."""
-        if len(self.selected_datasets) < 2:
-            messagebox.showwarning("Warning", "Please select at least 2 datasets to merge.")
+        self._analysis_cache.clear()
+        self._update_ui_state()
+
+    def _update_ui_state(self):
+        n = len(self.selected_datasets)
+        self.dataset_count_label.config(
+            text=f"{n} dataset{'s' if n != 1 else ''} selected")
+        self.analyze_btn.config(state=tk.NORMAL if n >= 1 else tk.DISABLED)
+        self.analyze_status.config(
+            text="Click 'Analyze' to refresh the table."
+            if n >= 1 else "Add >= 1 dataset to enable analysis.")
+        self.merge_btn.config(state=tk.DISABLED)
+
+    # -----------------------------------------------------------------------
+    # ANALYSIS
+    # -----------------------------------------------------------------------
+
+    def analyze_datasets(self):
+        if not self.selected_datasets:
             return
-        
-        # Capture variables before threading
-        params = {
-            'output_name': self.output_name_var.get(),
-            'preserve_order': self.preserve_order_var.get(),
-            'create_summary': self.create_summary_var.get()
-        }
-        
+        self.analyze_btn.config(state=tk.DISABLED)
+        self.analyze_status.config(text="Analysing...")
+        threading.Thread(target=self._run_analysis, daemon=True).start()
+
+    def _run_analysis(self):
+        keys     = self._selected_keys()
+        datasets = list(self.selected_datasets)
+        max_cap  = self.max_samples_var.get()
+        balance  = self.balance_var.get()
+
+        all_counts = [self._get_counts(ds, keys) for ds in datasets]
+
+        # Compute final "will take" per key
+        will_take: Dict[str, int] = {}
+        per_ds_take: Dict[str, List[int]] = {}
+        for k in keys:
+            raw   = [all_counts[i].get(k, 0) for i in range(len(datasets))]
+            takes = self._compute_takes(raw, max_cap, balance)
+            per_ds_take[k]  = takes
+            will_take[k]    = sum(takes)
+
+        def _update_tree():
+            tree = self.analysis_tree
+            tree.delete(*tree.get_children())
+            ds_names = [os.path.basename(d) for d in datasets]
+            cols     = ["Key"] + ds_names + ["Total avail.", "Will take"]
+            tree["columns"] = cols
+            for c in cols:
+                tree.heading(c, text=c)
+                tree.column(c,
+                            width=50 if c == "Key"
+                                  else max(70, min(140, len(c) * 8 + 20)),
+                            anchor="center")
+            tree.column("Will take", width=80)
+
+            for k in sorted(keys):
+                rc  = [all_counts[i].get(k, 0) for i in range(len(datasets))]
+                ta  = sum(rc)
+                wt  = will_take[k]
+                tag = ("zero" if wt == 0
+                        else "limited" if wt < ta
+                        else "ok")
+                tree.insert("", tk.END,
+                            values=[k] + rc + [ta, wt],
+                            tags=(tag,))
+
+            # Totals footer row
+            tots = [sum(all_counts[i].get(k, 0) for k in keys)
+                    for i in range(len(datasets))]
+            ga   = sum(tots)
+            gt   = sum(will_take.values())
+            tree.insert("", tk.END,
+                        values=["TOTAL"] + tots + [ga, gt],
+                        tags=("ok",))
+
+            self.analyze_status.config(
+                text=f"Done -- {len(keys)} keys | "
+                     f"{ga} available | {gt} will be taken")
+            self.analyze_btn.config(state=tk.NORMAL)
+            self.merge_btn.config(state=tk.NORMAL)
+            self._refresh_distribution(will_take)
+
+        self.parent.after_idle(_update_tree)
+
+    # -----------------------------------------------------------------------
+    # MERGE
+    # -----------------------------------------------------------------------
+
+    def start_merge(self):
+        if not self.selected_datasets:
+            messagebox.showwarning("Warning", "Please select at least 1 dataset.")
+            return
+        keys = self._selected_keys()
+        if not keys:
+            messagebox.showwarning("Warning", "No keys selected.")
+            return
+        name = self.output_name_var.get().strip()
+        if not name:
+            messagebox.showwarning("Warning", "Please enter an output dataset name.")
+            return
+        params = dict(output_name=name, keys=keys,
+                      max_cap=self.max_samples_var.get(),
+                      balance=self.balance_var.get(),
+                      create_summary=self.create_summary_var.get())
         self.merge_btn.config(state=tk.DISABLED)
         self.progress_var.set(0)
         self.results_text.delete(1.0, tk.END)
         self.is_merging = True
-        
-        thread = threading.Thread(target=self.run_merge, args=(params,), daemon=True)
-        thread.start()
-    
-    def run_merge(self, params: dict):
-        """Run the merge process in a background thread."""
+        threading.Thread(target=self._run_merge, args=(params,), daemon=True).start()
+
+    def _run_merge(self, params: dict):
         try:
-            output_name = params['output_name']
-            preserve_order = params['preserve_order']
-            create_summary = params['create_summary']
-            
-            # Create output directory
-            base_output = os.path.join(os.getcwd(), "recordings", "segmented")
-            output_path = os.path.join(base_output, output_name)
-            
-            if os.path.exists(output_path):
-                self._safe_ui_update(lambda: messagebox.showerror("Error", 
-                    f"Output folder '{output_name}' already exists. Please choose a different name."))
+            name    = params["output_name"]
+            keys    = params["keys"]
+            max_cap = params["max_cap"]
+            balance = params["balance"]
+            create_summary = params["create_summary"]
+            datasets = list(self.selected_datasets)
+
+            out_path = os.path.join(
+                os.getcwd(), "recordings", "segmented", name)
+            if os.path.exists(out_path):
+                self._safe_ui(lambda: messagebox.showerror(
+                    "Error",
+                    f"Folder '{name}' already exists. Choose a different name."))
                 return
-            
-            os.makedirs(output_path, exist_ok=True)
-            
-            # Update progress
-            self._update_progress(5, "Analyzing datasets...")
-            
-            # Get all keys across all datasets
-            all_keys = self.get_all_keys()
-            total_keys = len(all_keys)
-            
-            # Merge statistics
-            stats = {
-                'total_files': 0,
-                'key_distribution': defaultdict(int),
-                'dataset_sources': {}
-            }
-            
-            # Process each key
-            for i, key in enumerate(sorted(all_keys)):
-                progress = 5 + (i / total_keys) * 85
-                self._update_progress(progress, f"Merging key '{key}'...")
-                
-                # Create output folder for this key
-                key_output = os.path.join(output_path, key)
-                os.makedirs(key_output, exist_ok=True)
-                
-                # Collect all files for this key from all datasets
-                files_to_merge = []
-                
-                for dataset_path in self.selected_datasets:
-                    key_folder = os.path.join(dataset_path, key)
+
+            os.makedirs(out_path, exist_ok=True)
+            self._update_progress(5, "Analysing source datasets...")
+
+            all_counts = [self._get_counts(ds, keys) for ds in datasets]
+            stats = dict(
+                total_files=0,
+                key_distribution=defaultdict(int),
+                dataset_sources=defaultdict(int),
+                key_take_limits={})
+
+            for ki, key in enumerate(sorted(keys)):
+                pct = 5 + (ki / len(keys)) * 88
+                self._update_progress(pct, f"Merging key '{key}'...")
+
+                raw   = [all_counts[i].get(key, 0)
+                         for i in range(len(datasets))]
+                takes = self._compute_takes(raw, max_cap, balance)
+                stats["key_take_limits"][key] = takes
+
+                key_out = os.path.join(out_path, key)
+                os.makedirs(key_out, exist_ok=True)
+
+                dest_idx = 0
+                for di, ds_path in enumerate(datasets):
+                    take = takes[di]
+                    if take == 0:
+                        continue
+                    key_folder = os.path.join(ds_path, key)
                     if not os.path.isdir(key_folder):
                         continue
-                    
-                    # Get all .wav files
                     try:
-                        wav_files = [f for f in os.listdir(key_folder) if f.endswith('.wav')]
-                        
-                        for wav_file in wav_files:
-                            source_path = os.path.join(key_folder, wav_file)
-                            files_to_merge.append({
-                                'path': source_path,
-                                'dataset': os.path.basename(dataset_path),
-                                'original_name': wav_file
-                            })
+                        wav_files = sorted(
+                            [f for f in os.listdir(key_folder)
+                             if f.endswith(".wav")],
+                            key=lambda f: (
+                                int(os.path.splitext(f)[0])
+                                if os.path.splitext(f)[0].isdigit()
+                                else 999999))[:take]
                     except Exception as e:
                         print(f"Error reading {key_folder}: {e}")
-                
-                # Sort files if preserve_order is enabled
-                if preserve_order:
-                    # Sort by dataset order, then by numeric filename
-                    def sort_key(item):
-                        dataset_index = self.selected_datasets.index(
-                            os.path.join(os.path.dirname(os.path.dirname(item['path'])))
-                        )
-                        try:
-                            file_num = int(os.path.splitext(item['original_name'])[0])
-                        except:
-                            file_num = 999999
-                        return (dataset_index, file_num)
-                    
-                    files_to_merge.sort(key=sort_key)
-                
-                # Copy files with new sequential numbering
-                for idx, file_info in enumerate(files_to_merge):
-                    dest_path = os.path.join(key_output, f"{idx}.wav")
-                    shutil.copy2(file_info['path'], dest_path)
-                    
-                    stats['total_files'] += 1
-                    stats['key_distribution'][key] += 1
-                    
-                    # Track source
-                    if file_info['dataset'] not in stats['dataset_sources']:
-                        stats['dataset_sources'][file_info['dataset']] = 0
-                    stats['dataset_sources'][file_info['dataset']] += 1
-            
-            # Create summary if requested
+                        continue
+
+                    ds_name = os.path.basename(ds_path)
+                    for wf in wav_files:
+                        shutil.copy2(
+                            os.path.join(key_folder, wf),
+                            os.path.join(key_out, f"{dest_idx}.wav"))
+                        dest_idx += 1
+                        stats["total_files"]             += 1
+                        stats["key_distribution"][key]   += 1
+                        stats["dataset_sources"][ds_name] += 1
+
             if create_summary:
-                self._update_progress(95, "Creating summary report...")
-                self.create_merge_summary(output_path, stats)
-            
-            # Complete
+                self._update_progress(95, "Writing summary report...")
+                self._write_summary(
+                    out_path, stats, datasets, keys, max_cap, balance)
+
             self._update_progress(100, "Merge complete!")
-            
-            # Show results
-            result_text = f"MERGE COMPLETE\n{'='*60}\n\n"
-            result_text += f"Output: {output_name}\n"
-            result_text += f"Total files merged: {stats['total_files']}\n"
-            result_text += f"Keys with data: {len(stats['key_distribution'])}\n\n"
-            
-            result_text += "KEY DISTRIBUTION:\n"
-            result_text += "-" * 40 + "\n"
-            for key in sorted(stats['key_distribution'].keys()):
-                count = stats['key_distribution'][key]
-                result_text += f"  {key:5s} : {count:4d} samples\n"
-            
-            result_text += "\nSOURCE DATASETS:\n"
-            result_text += "-" * 40 + "\n"
-            for dataset, count in sorted(stats['dataset_sources'].items()):
-                result_text += f"  {dataset}: {count} files\n"
-            
-            self._safe_ui_update(lambda: self.results_text.insert(1.0, result_text))
-            
-            self._safe_ui_update(lambda: messagebox.showinfo("Success", 
-                f"Successfully merged {len(self.selected_datasets)} datasets!\n\n"
-                f"Output: {output_name}\n"
-                f"Total files: {stats['total_files']}"))
-            
+
+            dist  = dict(stats["key_distribution"])
+            max_v = max(dist.values()) if dist else 1
+
+            rt  = f"MERGE COMPLETE\n{'='*64}\n\n"
+            rt += f"Output folder  : {name}\n"
+            rt += f"Keys merged    : {len(dist)}\n"
+            rt += f"Total files    : {stats['total_files']}\n"
+            rt += f"Max cap        : {'unlimited' if max_cap == 0 else max_cap}\n"
+            rt += f"Balanced       : {'yes' if balance else 'no'}\n\n"
+            rt += f"{'KEY':<6} {'SAMPLES':>8}   DISTRIBUTION BAR\n"
+            rt += "-" * 56 + "\n"
+            for k in sorted(dist):
+                c   = dist[k]
+                bar = "#" * int(c / max_v * 32)
+                rt += f"  {k:<4} {c:>6}   {bar}\n"
+            rt += "\nSOURCE CONTRIBUTIONS:\n" + "-" * 40 + "\n"
+            for ds, cnt in sorted(stats["dataset_sources"].items()):
+                rt += f"  {ds}: {cnt} files\n"
+
+            self._safe_ui(lambda: self.results_text.insert(1.0, rt))
+            self._safe_ui(lambda: self._refresh_distribution(dist))
+            self._safe_ui(lambda: messagebox.showinfo(
+                "Merge Complete",
+                f"Merged successfully!\n\n"
+                f"Output : {name}\n"
+                f"Keys   : {len(dist)}\n"
+                f"Files  : {stats['total_files']}"))
+
         except Exception as e:
-            error_msg = f"Merge failed: {str(e)}"
-            self._update_progress(0, error_msg)
-            self._safe_ui_update(lambda: messagebox.showerror("Error", error_msg))
+            msg = f"Merge failed: {e}"
+            self._update_progress(0, msg)
+            self._safe_ui(lambda: messagebox.showerror("Error", msg))
             import traceback
             traceback.print_exc()
-        
         finally:
             self.is_merging = False
-            self._safe_ui_update(lambda: self.merge_btn.config(state=tk.NORMAL))
-    
-    def get_all_keys(self) -> set:
-        """Get all unique keys across all selected datasets."""
-        all_keys = set()
-        
-        for dataset_path in self.selected_datasets:
-            try:
-                items = os.listdir(dataset_path)
-                valid_keys = set('abcdefghijklmnopqrstuvwxyz0123456789')
-                
-                for item in items:
-                    if item in valid_keys and os.path.isdir(os.path.join(dataset_path, item)):
-                        all_keys.add(item)
-            except Exception as e:
-                print(f"Error reading {dataset_path}: {e}")
-        
-        return all_keys
-    
-    def create_merge_summary(self, output_path: str, stats: dict):
-        """Create a summary file for the merged dataset."""
-        summary_path = os.path.join(output_path, "merge_summary.txt")
-        
-        with open(summary_path, 'w') as f:
-            f.write("DATASET MERGE SUMMARY\n")
-            f.write("=" * 80 + "\n\n")
-            
-            f.write(f"Merge Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"Number of source datasets: {len(self.selected_datasets)}\n")
-            f.write(f"Total files merged: {stats['total_files']}\n")
-            f.write(f"Keys with data: {len(stats['key_distribution'])}\n\n")
-            
-            f.write("SOURCE DATASETS:\n")
+            self._safe_ui(lambda: self.merge_btn.config(state=tk.NORMAL))
+
+    # -----------------------------------------------------------------------
+    # DISTRIBUTION VISUALISATION
+    # -----------------------------------------------------------------------
+
+    def _refresh_distribution(self, distribution: Dict[str, int]):
+        """Refresh the bar chart and statistics panel."""
+        self.bar_chart.draw(distribution)
+
+        total  = sum(distribution.values())
+        n_keys = len([v for v in distribution.values() if v > 0])
+        avg    = total / n_keys if n_keys else 0
+        mn     = min(distribution.values()) if distribution else 0
+        mx     = max(distribution.values()) if distribution else 0
+
+        lines = [
+            f"Keys with data : {n_keys}   |   "
+            f"Total samples : {total}   |   "
+            f"Avg/key : {avg:.1f}   |   "
+            f"Min : {mn}   |   Max : {mx}",
+            "",
+            f"{'Key':<6} {'Count':>6}   {'Share':>6}   Distribution",
+            "-" * 60,
+        ]
+        for k in sorted(distribution.keys()):
+            c   = distribution[k]
+            pct = c / total * 100 if total else 0
+            bar = "|" * int(pct / 2)   # each pipe ~ 2 %
+            lines.append(f"  {k:<4} {c:>6}   {pct:5.1f}%   {bar}")
+
+        self.dist_summary.config(state=tk.NORMAL)
+        self.dist_summary.delete(1.0, tk.END)
+        self.dist_summary.insert(1.0, "\n".join(lines))
+        self.dist_summary.config(state=tk.DISABLED)
+
+    # -----------------------------------------------------------------------
+    # SUMMARY FILE
+    # -----------------------------------------------------------------------
+
+    def _write_summary(self, out_path: str, stats: dict,
+                       datasets: List[str], keys: List[str],
+                       max_cap: int, balance: bool):
+        dist  = dict(stats["key_distribution"])
+        total = stats["total_files"]
+        max_v = max(dist.values()) if dist else 1
+
+        with open(os.path.join(out_path, "merge_summary.txt"), "w") as f:
+            f.write("DATASET MERGE SUMMARY\n" + "=" * 80 + "\n\n")
+            f.write(f"Merge date         : "
+                    f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Source datasets    : {len(datasets)}\n")
+            f.write(f"Keys selected      : {', '.join(sorted(keys))}\n")
+            f.write(f"Max cap per ds/key : "
+                    f"{'unlimited' if max_cap == 0 else max_cap}\n")
+            f.write(f"Balanced sampling  : {'yes' if balance else 'no'}\n")
+            f.write(f"Total files        : {total}\n\n")
+
+            f.write("SOURCE DATASETS:\n" + "-" * 80 + "\n")
+            for i, ds in enumerate(datasets, 1):
+                cnt = stats["dataset_sources"].get(os.path.basename(ds), 0)
+                f.write(f"  {i}. {os.path.basename(ds)} -- {cnt} files\n")
+
+            f.write("\n\nKEY DISTRIBUTION:\n" + "-" * 80 + "\n")
+            f.write(f"  {'Key':<6} {'Count':>6}  {'Share':>7}  Bar\n")
+            f.write("  " + "-" * 60 + "\n")
+            for k in sorted(dist.keys()):
+                c   = dist[k]
+                pct = c / total * 100 if total else 0
+                bar = "#" * int(c / max_v * 40)
+                f.write(f"  {k:<6} {c:>6}  {pct:6.1f}%  {bar}\n")
+
+            f.write("\n\nPER-KEY TAKE LIMITS (samples taken per dataset):\n")
             f.write("-" * 80 + "\n")
-            for i, dataset_path in enumerate(self.selected_datasets, 1):
-                dataset_name = os.path.basename(dataset_path)
-                file_count = stats['dataset_sources'].get(dataset_name, 0)
-                f.write(f"  {i}. {dataset_name} ({file_count} files)\n")
-            
-            f.write("\n\nKEY DISTRIBUTION:\n")
-            f.write("-" * 80 + "\n")
-            for key in sorted(stats['key_distribution'].keys()):
-                count = stats['key_distribution'][key]
-                f.write(f"  {key:5s} : {count:4d} samples\n")
-            
-            f.write("\n\nMERGE DETAILS:\n")
-            f.write("-" * 80 + "\n")
-            f.write(f"Files are numbered sequentially (0.wav, 1.wav, ...) within each key folder.\n")
-            f.write(f"Original ordering from source datasets has been preserved.\n")
-    
+            ds_names = [os.path.basename(d) for d in datasets]
+            hdr = f"  {'Key':<6}" + "".join(f"  {n[:14]:>14}" for n in ds_names)
+            f.write(hdr + "\n  " + "-" * len(hdr) + "\n")
+            for k in sorted(keys):
+                takes = stats["key_take_limits"].get(k, [0] * len(datasets))
+                row   = f"  {k:<6}" + "".join(f"  {t:>14}" for t in takes)
+                f.write(row + "\n")
+
+    # -----------------------------------------------------------------------
+    # UTILITIES
+    # -----------------------------------------------------------------------
+
     def _update_progress(self, value: float, message: str):
-        """Thread-safe progress update."""
-        self._safe_ui_update(lambda: self.progress_var.set(value))
-        self._safe_ui_update(lambda: self.progress_label.config(text=message))
-    
-    def _safe_ui_update(self, func):
-        """Safely update UI from any thread."""
+        self._safe_ui(lambda: self.progress_var.set(value))
+        self._safe_ui(lambda: self.progress_label.config(text=message))
+
+    def _safe_ui(self, func):
+        """Safely schedule a UI update from any thread."""
         try:
             self.parent.after_idle(func)
         except Exception as e:
