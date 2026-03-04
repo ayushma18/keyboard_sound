@@ -186,6 +186,7 @@ class DataMergerTab:
                            text="3. Sampling Strategy  (per key, per dataset)",
                            font=("Arial", 10, "bold"), padx=15, pady=15)
         fr.pack(fill=tk.X, pady=(0, 15))
+        # -- Per-dataset cap row
         mr = tk.Frame(fr)
         mr.pack(fill=tk.X, pady=5)
         tk.Label(mr, text="Max samples per key per dataset:",
@@ -202,23 +203,49 @@ class DataMergerTab:
         sp.bind("<FocusOut>", lambda e: self._sync_slider())
         tk.Label(mr, text="(0 = unlimited)",
                  font=("Arial", 8), fg="#888").pack(side=tk.LEFT)
-        self.balance_var = tk.BooleanVar(value=True)
-        bal_text = (
-            "Balance datasets  --  for each key, cap at the minimum sample count\n"
-            "     across all datasets  (e.g. datasets have 300 and 100 for key 'a'\n"
-            "     -> take 100 from each; no single dataset dominates the final merge)"
-        )
-        tk.Checkbutton(fr, text=bal_text,
-                       variable=self.balance_var,
-                       font=("Arial", 9), justify=tk.LEFT,
-                       anchor="w").pack(anchor=tk.W, padx=20, pady=5)
+        # -- Mode: Combine All vs Balance
+        mode_fr = tk.LabelFrame(fr, text="Combine Mode", font=("Arial", 9, "bold"))
+        mode_fr.pack(fill=tk.X, padx=5, pady=(8, 5))
+        self.balance_var = tk.StringVar(value="balance")
+        tk.Radiobutton(
+            mode_fr,
+            text="Combine All  --  concatenate every available sample from all datasets (no equalisation)",
+            variable=self.balance_var, value="combine",
+            font=("Arial", 9), anchor="w",
+            command=self._update_strategy_label
+        ).pack(anchor=tk.W, padx=10, pady=2)
+        tk.Radiobutton(
+            mode_fr,
+            text="Balance  --  for each key cap all datasets at the minimum count\n"
+                 "               (e.g. 300 vs 100 samples -> take 100 from each; removes bias)",
+            variable=self.balance_var, value="balance",
+            font=("Arial", 9), justify=tk.LEFT, anchor="w",
+            command=self._update_strategy_label
+        ).pack(anchor=tk.W, padx=10, pady=2)
+        # -- Final max per key (total cap across all datasets combined)
+        fm_row = tk.Frame(fr)
+        fm_row.pack(fill=tk.X, pady=(8, 0))
+        tk.Label(fm_row, text="Final max per key (total across all datasets):",
+                 font=("Arial", 9), width=44, anchor=tk.W).pack(side=tk.LEFT)
+        self.final_max_var = tk.IntVar(value=0)
+        tk.Scale(fm_row, from_=0, to=2000, orient=tk.HORIZONTAL,
+                 variable=self.final_max_var,
+                 length=200, showvalue=False).pack(side=tk.LEFT, padx=5)
+        fm_sp = tk.Spinbox(fm_row, from_=0, to=99999,
+                           textvariable=self.final_max_var,
+                           width=6, font=("Arial", 10),
+                           command=self._sync_final_max)
+        fm_sp.pack(side=tk.LEFT, padx=5)
+        fm_sp.bind("<FocusOut>", lambda e: self._sync_final_max())
+        tk.Label(fm_row, text="(0 = no final cap)",
+                 font=("Arial", 8), fg="#888").pack(side=tk.LEFT)
+        # -- Strategy summary label
         self.strategy_label = tk.Label(fr, text="",
                                        font=("Arial", 8, "italic"), fg="#555")
-        self.strategy_label.pack(anchor=tk.W, padx=20)
-        self.max_samples_var.trace_add("write",
-                                       lambda *_: self._update_strategy_label())
-        self.balance_var.trace_add("write",
-                                   lambda *_: self._update_strategy_label())
+        self.strategy_label.pack(anchor=tk.W, padx=20, pady=(5, 0))
+        self.max_samples_var.trace_add("write", lambda *_: self._update_strategy_label())
+        self.balance_var.trace_add("write",     lambda *_: self._update_strategy_label())
+        self.final_max_var.trace_add("write",   lambda *_: self._update_strategy_label())
         self._update_strategy_label()
 
     # -- Section 4: analyze --------------------------------------------------
@@ -351,12 +378,21 @@ class DataMergerTab:
         except ValueError:
             pass
 
+    def _sync_final_max(self):
+        try:
+            val = max(0, int(self.final_max_var.get()))
+            self.final_max_var.set(val)
+        except ValueError:
+            pass
+
     def _update_strategy_label(self):
-        mx  = self.max_samples_var.get()
-        bal = self.balance_var.get()
-        cap = "take all available" if mx == 0 else f"cap at {mx} per key/dataset"
-        eq  = "; equalise at per-key minimum across datasets" if bal else ""
-        self.strategy_label.config(text=f"Strategy: {cap}{eq}.")
+        mx   = self.max_samples_var.get()
+        mode = self.balance_var.get()
+        fm   = self.final_max_var.get()
+        cap  = "take all available" if mx == 0 else f"cap at {mx} per key/dataset"
+        mode_txt = "then combine all" if mode == "combine" else "then equalise at per-key minimum"
+        fm_txt   = f"; final clip at {fm} per key" if fm > 0 else ""
+        self.strategy_label.config(text=f"Strategy: {cap}; {mode_txt}{fm_txt}.")
 
     def _selected_keys(self) -> List[str]:
         return [k for k in ALL_KEYS if self._key_vars[k].get()]
@@ -378,24 +414,35 @@ class DataMergerTab:
         return result
 
     def _compute_takes(self, raw_counts: List[int],
-                       max_cap: int, balance: bool) -> List[int]:
+                       max_cap: int, balance: str,
+                       final_max: int = 0) -> List[int]:
         """
         Compute how many samples to take from each dataset for one key.
 
         Rules
         -----
         1. Clamp every count at max_cap (0 = unlimited).
-        2. If balance=True, find the minimum non-zero clamped value and
-           reduce all non-zero entries to that value.
-           (Datasets with 0 contribute 0 and are not considered.)
+        2. balance='balance' -> equalise all non-zero entries at their minimum.
+           balance='combine' -> keep clamped values (no equalisation).
+        3. If final_max > 0, proportionally scale down so sum(takes) <= final_max,
+           distributing any rounding remainder to the largest contributors.
         Returns a list aligned with self.selected_datasets.
         """
         avail = [min(c, max_cap) if max_cap > 0 else c for c in raw_counts]
-        if balance:
+        if balance == "balance":
             non_zero = [v for v in avail if v > 0]
             if non_zero:
                 min_count = min(non_zero)
                 avail = [min_count if v > 0 else 0 for v in avail]
+        # Apply final-max total cap
+        if final_max > 0:
+            total = sum(avail)
+            if total > final_max:
+                avail = [int(v * final_max / total) for v in avail]
+                remainder = final_max - sum(avail)
+                indices = sorted(range(len(avail)), key=lambda i: -avail[i])
+                for i in range(remainder):
+                    avail[indices[i % len(indices)]] += 1
         return avail
 
     # -----------------------------------------------------------------------
@@ -472,10 +519,11 @@ class DataMergerTab:
         threading.Thread(target=self._run_analysis, daemon=True).start()
 
     def _run_analysis(self):
-        keys     = self._selected_keys()
-        datasets = list(self.selected_datasets)
-        max_cap  = self.max_samples_var.get()
-        balance  = self.balance_var.get()
+        keys      = self._selected_keys()
+        datasets  = list(self.selected_datasets)
+        max_cap   = self.max_samples_var.get()
+        balance   = self.balance_var.get()
+        final_max = self.final_max_var.get()
 
         all_counts = [self._get_counts(ds, keys) for ds in datasets]
 
@@ -484,7 +532,7 @@ class DataMergerTab:
         per_ds_take: Dict[str, List[int]] = {}
         for k in keys:
             raw   = [all_counts[i].get(k, 0) for i in range(len(datasets))]
-            takes = self._compute_takes(raw, max_cap, balance)
+            takes = self._compute_takes(raw, max_cap, balance, final_max)
             per_ds_take[k]  = takes
             will_take[k]    = sum(takes)
 
@@ -550,6 +598,7 @@ class DataMergerTab:
         params = dict(output_name=name, keys=keys,
                       max_cap=self.max_samples_var.get(),
                       balance=self.balance_var.get(),
+                      final_max=self.final_max_var.get(),
                       create_summary=self.create_summary_var.get())
         self.merge_btn.config(state=tk.DISABLED)
         self.progress_var.set(0)
@@ -559,10 +608,11 @@ class DataMergerTab:
 
     def _run_merge(self, params: dict):
         try:
-            name    = params["output_name"]
-            keys    = params["keys"]
-            max_cap = params["max_cap"]
-            balance = params["balance"]
+            name      = params["output_name"]
+            keys      = params["keys"]
+            max_cap   = params["max_cap"]
+            balance   = params["balance"]
+            final_max = params["final_max"]
             create_summary = params["create_summary"]
             datasets = list(self.selected_datasets)
 
@@ -590,7 +640,7 @@ class DataMergerTab:
 
                 raw   = [all_counts[i].get(key, 0)
                          for i in range(len(datasets))]
-                takes = self._compute_takes(raw, max_cap, balance)
+                takes = self._compute_takes(raw, max_cap, balance, final_max)
                 stats["key_take_limits"][key] = takes
 
                 key_out = os.path.join(out_path, key)
@@ -629,7 +679,8 @@ class DataMergerTab:
             if create_summary:
                 self._update_progress(95, "Writing summary report...")
                 self._write_summary(
-                    out_path, stats, datasets, keys, max_cap, balance)
+                    out_path, stats, datasets, keys, max_cap, balance,
+                    final_max)
 
             self._update_progress(100, "Merge complete!")
 
@@ -641,7 +692,8 @@ class DataMergerTab:
             rt += f"Keys merged    : {len(dist)}\n"
             rt += f"Total files    : {stats['total_files']}\n"
             rt += f"Max cap        : {'unlimited' if max_cap == 0 else max_cap}\n"
-            rt += f"Balanced       : {'yes' if balance else 'no'}\n\n"
+            rt += f"Mode           : {'combine all' if balance == 'combine' else 'balanced (equalise at min)'}\n"
+            rt += f"Final clip     : {'none' if final_max == 0 else str(final_max) + ' per key'}\n\n"
             rt += f"{'KEY':<6} {'SAMPLES':>8}   DISTRIBUTION BAR\n"
             rt += "-" * 56 + "\n"
             for k in sorted(dist):
@@ -711,7 +763,8 @@ class DataMergerTab:
 
     def _write_summary(self, out_path: str, stats: dict,
                        datasets: List[str], keys: List[str],
-                       max_cap: int, balance: bool):
+                       max_cap: int, balance: str,
+                       final_max: int = 0):
         dist  = dict(stats["key_distribution"])
         total = stats["total_files"]
         max_v = max(dist.values()) if dist else 1
@@ -724,7 +777,10 @@ class DataMergerTab:
             f.write(f"Keys selected      : {', '.join(sorted(keys))}\n")
             f.write(f"Max cap per ds/key : "
                     f"{'unlimited' if max_cap == 0 else max_cap}\n")
-            f.write(f"Balanced sampling  : {'yes' if balance else 'no'}\n")
+            f.write(f"Combine mode       : "
+                    f"{'combine all' if balance == 'combine' else 'balanced (equalise at min)'}\n")
+            f.write(f"Final clip per key : "
+                    f"{'none' if final_max == 0 else final_max}\n")
             f.write(f"Total files        : {total}\n\n")
 
             f.write("SOURCE DATASETS:\n" + "-" * 80 + "\n")
