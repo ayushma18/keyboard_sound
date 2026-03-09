@@ -1,0 +1,422 @@
+BATCH SEGMENTATION SUMMARY
+================================================================================
+
+Total sessions: 46
+Processed successfully: 46
+Failed: 0
+Total keystrokes: 1380
+Total saved: 1380
+Total skipped: 0
+Success rate: 100.0%
+
+
+KEY DISTRIBUTION (across all sessions):
+----------------------------------------
+  0         :   60 samples
+  1         :   60 samples
+  2         :   60 samples
+  3         :   60 samples
+  4         :   60 samples
+  5         :   60 samples
+  6         :   60 samples
+  7         :   60 samples
+  8         :   60 samples
+  9         :   60 samples
+  a         :   30 samples
+  b         :   30 samples
+  c         :   30 samples
+  d         :   30 samples
+  e         :   30 samples
+  f         :   30 samples
+  g         :   30 samples
+  h         :   30 samples
+  i         :   30 samples
+  j         :   30 samples
+  k         :   30 samples
+  l         :   30 samples
+  m         :   30 samples
+  n         :   30 samples
+  o         :   30 samples
+  p         :   30 samples
+  q         :   30 samples
+  r         :   30 samples
+  s         :   30 samples
+  t         :   30 samples
+  u         :   30 samples
+  v         :   30 samples
+  w         :   30 samples
+  x         :   30 samples
+  y         :   30 samples
+  z         :   30 samples
+
+
+SESSION DETAILS:
+================================================================================
+
+Session: 0
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    0: 30
+
+Session: 1
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    1: 30
+
+Session: 2
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    2: 30
+
+Session: 3
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    3: 30
+
+Session: 4
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    4: 30
+
+Session: 5
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    5: 30
+
+Session: 6
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    6: 30
+
+Session: 7
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    7: 30
+
+Session: 8
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    8: 30
+
+Session: 9
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    9: 30
+
+Session: a
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    a: 30
+
+Session: b
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    b: 30
+
+Session: c
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    c: 30
+
+Session: d
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    d: 30
+
+Session: e
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    e: 30
+
+Session: f
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    f: 30
+
+Session: g
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    g: 30
+
+Session: h
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    h: 30
+
+Session: i
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    i: 30
+
+Session: j
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    j: 30
+
+Session: k
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    k: 30
+
+Session: l
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    l: 30
+
+Session: m
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    m: 30
+
+Session: n
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    n: 30
+
+Session: o
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    o: 30
+
+Session: p
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    p: 30
+
+Session: q
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    q: 30
+
+Session: r
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    r: 30
+
+Session: s
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    s: 30
+
+Session: t
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    t: 30
+
+Session: u
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    u: 30
+
+Session: v
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    v: 30
+
+Session: w
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    w: 30
+
+Session: x
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    x: 30
+
+Session: y
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    y: 30
+
+Session: z
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    z: 30
+
+Session: 0
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    0: 30
+
+Session: 1
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    1: 30
+
+Session: 2
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    2: 30
+
+Session: 3
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    3: 30
+
+Session: 4
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    4: 30
+
+Session: 5
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    5: 30
+
+Session: 6
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    6: 30
+
+Session: 7
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    7: 30
+
+Session: 8
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    8: 30
+
+Session: 9
+  Status: SUCCESS
+  Keystrokes: 30
+  Saved: 30
+  Skipped: 0
+  Keys found:
+    9: 30
