@@ -1,6 +1,6 @@
 {
     "mic_id": "dji",
-    "keyboard_id": "laptop-aayu",
+    "keyboard_id": "laptop-aayu-middle",
     "input_device": 2,
     "output_device": 4,
     "sample_rate": 44100
