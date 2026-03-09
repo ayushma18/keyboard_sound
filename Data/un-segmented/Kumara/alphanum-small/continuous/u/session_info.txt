@@ -1,0 +1,8 @@
+Session: uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu
+Microphone: dji
+Keyboard: kumara
+Start Time: 2026-02-06T01:59:24.106158
+Duration: 34.00 seconds (34 chunks)
+Keystrokes: 37
+Sample Rate: 44100
+Channels: 1
