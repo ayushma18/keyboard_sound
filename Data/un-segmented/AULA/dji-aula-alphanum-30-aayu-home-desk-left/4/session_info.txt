@@ -1,8 +1,0 @@
-Session: 4444444444444444444444444444444
-Microphone: dji
-Keyboard: laptop-aayu
-Start Time: 2026-03-08T21:48:31.684843
-Duration: 24.00 seconds (24 chunks)
-Keystrokes: 30
-Sample Rate: 44100
-Channels: 1

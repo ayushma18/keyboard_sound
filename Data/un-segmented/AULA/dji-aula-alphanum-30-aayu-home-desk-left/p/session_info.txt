@@ -1,8 +1,0 @@
-Session: ppppppppppppppppppppppppppppppp
-Microphone: dji
-Keyboard: laptop-aayu
-Start Time: 2026-03-08T22:02:36.392165
-Duration: 27.00 seconds (27 chunks)
-Keystrokes: 30
-Sample Rate: 44100
-Channels: 1

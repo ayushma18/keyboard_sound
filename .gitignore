@@ -11,11 +11,15 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Recordings
-recordings/*.wav
-recordings/metadata.csv
-detection_debug
-Data/combined
+# Recordings - exclude all recording folders and their contents
+recordings/
+detection_debug/
+Data/combined/
+
+# Data folders with audio files
+Data/segmented/
+Data/un-segmented/
+Data/small-bulk-test/
 
 # Env
 .env
@@ -26,5 +30,4 @@ venv
 myenv
 train/
 backups/
-recordings
 model/debug_output/*

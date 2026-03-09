@@ -1,8 +1,0 @@
-Session: 2222222222222222222222222222222
-Microphone: dji
-Keyboard: laptop-aayu
-Start Time: 2026-03-08T21:47:18.274990
-Duration: 24.00 seconds (24 chunks)
-Keystrokes: 30
-Sample Rate: 44100
-Channels: 1
