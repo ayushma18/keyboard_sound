@@ -1,8 +1,0 @@
-Session: ggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
-Microphone: dji 
-Keyboard: kumara
-Start Time: 2026-02-11T21:26:22.388814
-Duration: 78.00 seconds (78 chunks)
-Keystrokes: 100
-Sample Rate: 44100
-Channels: 1
