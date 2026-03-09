@@ -1,0 +1,8 @@
+Session: 8888888888888888888888888888888
+Microphone: dji
+Keyboard: aula-ayu-home-floor-middle
+Start Time: 2026-03-09T23:00:35.079352
+Duration: 26.00 seconds (26 chunks)
+Keystrokes: 30
+Sample Rate: 44100
+Channels: 1
