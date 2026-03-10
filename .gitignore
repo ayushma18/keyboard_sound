@@ -13,8 +13,7 @@ Thumbs.db
 
 # Env
 .env
-
-
+Data/combined
 #venv
 venv
 myenv
