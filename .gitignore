@@ -11,15 +11,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Recordings - exclude all recording folders and their contents
-detection_debug/
-Data/combined/
-
-# Data folders with audio files
-Data/segmented/
-Data/un-segmented/
-Data/small-bulk-test/
-
 # Env
 .env
 
