@@ -249,81 +249,11 @@ class MyCoAtNet(nn.Sequential):
 
 
 # ============================================================================
-# CNN MODEL (from CNN.ipynb)
+# CNN MODEL (imported from cnn_shared.py)
 # ============================================================================
-
-class ConvBlock(nn.Module):
-    """Convolutional block with double conv layers, batch norm, and ReLU"""
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1):
-        super().__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=kernel_size, stride=1, padding=padding),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True)
-        )
-
-    def forward(self, x):
-        return self.conv(x)
-
-
-class CNN(nn.Module):
-    """CNN model from CNN.ipynb for keystroke classification"""
-    def __init__(self, num_classes=36):
-        super().__init__()
-
-        self.conv1 = ConvBlock(1, 64)
-        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.dropout1 = nn.Dropout2d(0.25)
-
-        self.conv2 = ConvBlock(64, 128)
-        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.dropout2 = nn.Dropout2d(0.25)
-
-        self.conv3 = ConvBlock(128, 256)
-        self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.dropout3 = nn.Dropout2d(0.3)
-
-        self.conv4 = ConvBlock(256, 512)
-        self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.dropout4 = nn.Dropout2d(0.3)
-
-        self.global_pool = nn.AdaptiveAvgPool2d(1)
-
-        self.fc = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(512, 256),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
-            nn.Linear(256, 128),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
-            nn.Linear(128, num_classes)
-        )
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.pool1(x)
-        x = self.dropout1(x)
-
-        x = self.conv2(x)
-        x = self.pool2(x)
-        x = self.dropout2(x)
-
-        x = self.conv3(x)
-        x = self.pool3(x)
-        x = self.dropout3(x)
-
-        x = self.conv4(x)
-        x = self.pool4(x)
-        x = self.dropout4(x)
-
-        x = self.global_pool(x)
-        x = self.fc(x)
-
-        return x
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from cnn_shared import ConvBlock, CNN
 
 
 # ============================================================================
