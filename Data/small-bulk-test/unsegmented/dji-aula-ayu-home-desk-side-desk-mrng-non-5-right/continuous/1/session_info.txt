@@ -1,0 +1,8 @@
+Session: 111111222223333344444555556666677777888889999900000
+Microphone: dji
+Keyboard: aula-ayu-home-desk-side-desk-mrng-non-5-right
+Start Time: 2026-03-12T08:15:37.218484
+Duration: 43.00 seconds (43 chunks)
+Keystrokes: 50
+Sample Rate: 44100
+Channels: 1
