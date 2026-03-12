@@ -309,3 +309,61 @@ def get_device():
         except Exception as e:
             print(f"⚠️  CUDA available but unusable ({e}), falling back to CPU")
     return 'cpu'
+
+
+# ── Mel spectrogram config ─────────────────────────────────────────────────────
+
+from dataclasses import dataclass, field
+
+@dataclass
+class MelConfig:
+    """
+    All mel-spectrogram parameters in one place for systematic experimentation.
+    Pass an instance to build_mel_transform() to get a ready-made transform pipeline.
+
+    Fields:
+        n_mels      – mel frequency bins           (higher = finer freq resolution)
+        hop_length  – time step in samples         (lower  = finer time grid)
+        n_fft       – FFT window size              (larger = finer freq, coarser time)
+        win_length  – analysis window length       (shorter = better transient capture)
+        f_min       – lowest frequency in Hz
+        f_max       – highest frequency in Hz
+        power       – 2.0 = power spectrogram, 1.0 = magnitude spectrogram
+        sample_rate – audio sample rate (must match training data)
+    """
+    n_mels      : int   = 128
+    hop_length  : int   = 256
+    n_fft       : int   = 1024
+    win_length  : int   = 512
+    f_min       : float = 50.0
+    f_max       : float = 16000.0
+    power       : float = 2.0
+    sample_rate : int   = 44100
+
+    def label(self) -> str:
+        return (f"mels={self.n_mels} hop={self.hop_length} "
+                f"fft={self.n_fft} win={self.win_length} "
+                f"f=[{int(self.f_min)},{int(self.f_max)}] p={self.power}")
+
+
+def build_mel_transform(cfg: MelConfig):
+    """
+    Return a Compose pipeline: waveform Tensor → (1, n_mels, T) Tensor in dB scale.
+
+    Example::
+        cfg = MelConfig(n_mels=256, hop_length=128)
+        tfm = build_mel_transform(cfg)
+        spec = tfm(waveform)   # shape: (1, 256, T)
+    """
+    to_mel = torchaudio.transforms.MelSpectrogram(
+        sample_rate=cfg.sample_rate,
+        n_mels=cfg.n_mels,
+        hop_length=cfg.hop_length,
+        n_fft=cfg.n_fft,
+        win_length=cfg.win_length,
+        f_min=cfg.f_min,
+        f_max=cfg.f_max,
+        power=cfg.power,
+    )
+    to_db_numpy = lambda s: (10 * s.clamp(min=1e-10).log10())[0, :, :].numpy()
+    return Compose([to_mel, to_db_numpy, ToTensor()])
