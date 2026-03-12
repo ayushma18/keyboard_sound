@@ -17,7 +17,7 @@ class KeystrokeLogger:
         self.is_listening = False
         self.keystroke_queue = queue.Queue()
         self.pressed_keys = {}
-        self.debounce_time = 0.15  # seconds
+        self.debounce_time = 0.05  # seconds - reduced for rapid keystroke collection
         
     def start(self) -> bool:
         """Start listening to keyboard events."""
@@ -51,10 +51,10 @@ class KeystrokeLogger:
             except AttributeError:
                 key_label = str(key).replace('Key.', '')
             
-            # Debouncing
+            # Debouncing (optional - can disable for rapid consecutive presses)
             last_press = self.pressed_keys.get(key_label, 0)
-            if timestamp - last_press < self.debounce_time:
-                return
+            # if timestamp - last_press < self.debounce_time:  # Disabled for rapid data collection
+            #     return
             
             self.pressed_keys[key_label] = timestamp
             
