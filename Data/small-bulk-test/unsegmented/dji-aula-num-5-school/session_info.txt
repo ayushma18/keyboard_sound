@@ -1,0 +1,8 @@
+Session: school
+Microphone: dji
+Keyboard: laptop
+Start Time: 2026-03-13T12:49:26.723793
+Duration: 37.00 seconds (37 chunks)
+Keystrokes: 50
+Sample Rate: 44100
+Channels: 1

@@ -1,0 +1,8 @@
+Session: 6666666666666666666666666666666666666666666666666666666666666
+Microphone: dji
+Keyboard: aula-collage
+Start Time: 2026-03-13T13:05:40.953876
+Duration: 43.00 seconds (43 chunks)
+Keystrokes: 60
+Sample Rate: 44100
+Channels: 1

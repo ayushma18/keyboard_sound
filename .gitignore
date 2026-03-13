@@ -20,3 +20,4 @@ myenv
 train/
 backups/
 model/debug_output/*
+recordings/
