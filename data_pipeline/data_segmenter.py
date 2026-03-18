@@ -1,21 +1,23 @@
 """
-Ultimate Keystroke Segmentation Module — v2 Ultimate
+Keystroke Segmentation Module — v5
 
-COMPLETE FEATURE SET:
-✓ Multi-scale STE peak-finding (v2 core)
-✓ Local SNR gates (10ms window) 
-✓ Peak amplitude + crest factor checks
-✓ Envelope-based template matching
-✓ Bandpass filtering + overlap guard
-✓ Diagnostic rejection logging
-✓ Batch processing with session discovery
-✓ CSV-time guidance with automatic peak refinement
-✓ EMBEDDED WAVEFORM PREVIEW with offset adjustment
-✓ LIVE VISUALIZATION while adjusting offset
-✓ FULL-AUDIO VERIFICATION VIEWER after extraction
-✓ Interactive playback controls (zoom, pan, navigate)
-✓ High-quality matplotlib rendering
+PHILOSOPHY: The CSV log IS the ground truth. Every CSV entry = exactly one
+keystroke = exactly one output segment.  The segment is long enough (430 ms
+default) to capture both the press transient and the release transient in a
+single clip.
+
+Key design decisions:
+  1. ONE segment per CSV entry.  No separate press/release files.
+     Output count == CSV entry count (minus quality rejections).
+  2. Auto-offset via histogram cross-correlation between conservative onset
+     detections and CSV times.
+  3. Peak finding is CSV-guided: for each CSV time + offset, find the
+     significant peak CLOSEST to the adjusted time (not the loudest).
+     This ensures the press transient is picked over a louder release.
+  4. Quality gates (SNR, crest factor, template) can reject truly silent or
+     noise-only segments, but defaults are lenient.
 """
+
 import os
 import csv
 import numpy as np
@@ -25,118 +27,89 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from scipy import signal
 from scipy.ndimage import uniform_filter1d
+from scipy.signal import find_peaks
 import threading
 
 try:
+    import matplotlib
+    matplotlib.use("TkAgg")
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-    from matplotlib.widgets import Slider
     HAS_MATPLOTLIB = True
 except ImportError:
     HAS_MATPLOTLIB = False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  HELPER FUNCTIONS (ALL V2 CORE)
+#  SIGNAL UTILITIES
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _short_time_energy(audio: np.ndarray, win_samples: int) -> np.ndarray:
-    """Sliding-window mean of squared samples."""
-    sq = audio.astype(np.float64) ** 2
-    return uniform_filter1d(sq, size=max(1, win_samples), mode='constant', origin=0)
+def _to_mono(audio: np.ndarray) -> np.ndarray:
+    if audio.ndim == 2:
+        return np.mean(audio, axis=1).astype(np.float64)
+    return audio.astype(np.float64)
 
 
-def _estimate_noise_floor(audio: np.ndarray, sr: int,
-                           frame_dur: float = 0.050,
-                           quantile: float = 0.05) -> float:
-    """Estimate noise floor RMS using the quietest frames."""
-    frame_len = int(frame_dur * sr)
+def _amplitude_envelope(audio: np.ndarray, sr: int, ms: float = 3.0) -> np.ndarray:
+    env = np.abs(audio.astype(np.float64))
+    return uniform_filter1d(env, size=max(1, int(ms / 1000.0 * sr)), mode='constant')
+
+
+def _estimate_noise_floor(audio: np.ndarray, sr: int) -> float:
+    frame_len = int(0.050 * sr)
     n_frames = len(audio) // frame_len
     if n_frames < 5:
         return 1e-7
     frames = audio[:n_frames * frame_len].reshape(n_frames, frame_len)
-    rms_per_frame = np.sqrt(np.mean(frames.astype(np.float64) ** 2, axis=1))
-    floor = float(np.percentile(rms_per_frame, quantile * 100))
-    return max(floor, 1e-7)
+    rms = np.sqrt(np.mean(frames.astype(np.float64) ** 2, axis=1))
+    return max(float(np.percentile(rms, 5)), 1e-7)
 
 
-def _local_peak_rms(audio: np.ndarray, center: int, sr: int,
-                     window_ms: float = 10.0) -> float:
-    """RMS of short window centered on peak."""
-    half_win = int(window_ms / 1000.0 * sr / 2)
-    lo = max(0, center - half_win)
-    hi = min(len(audio), center + half_win)
+def _local_rms(audio: np.ndarray, center: int, sr: int, ms: float = 10.0) -> float:
+    hw = int(ms / 1000.0 * sr / 2)
+    lo, hi = max(0, center - hw), min(len(audio), center + hw)
     if hi <= lo:
         return 0.0
-    seg = audio[lo:hi].astype(np.float64)
-    return float(np.sqrt(np.mean(seg ** 2)))
+    return float(np.sqrt(np.mean(audio[lo:hi].astype(np.float64) ** 2)))
 
 
-def _find_waveform_peak(audio: np.ndarray, center: int, search_radius: int) -> int:
-    """Index of max |amplitude| within ±search_radius of center."""
-    lo = max(0, center - search_radius)
-    hi = min(len(audio), center + search_radius)
-    if hi <= lo:
-        return center
-    return int(lo + np.argmax(np.abs(audio[lo:hi])))
+def _rms(seg: np.ndarray) -> float:
+    return float(np.sqrt(np.mean(seg.astype(np.float64) ** 2)))
 
 
-def _rms(segment: np.ndarray) -> float:
-    return float(np.sqrt(np.mean(segment.astype(np.float64) ** 2)))
-
-
-def _amplitude_envelope(audio: np.ndarray, sr: int, smooth_ms: float = 5.0) -> np.ndarray:
-    """Amplitude envelope for template matching."""
-    env = np.abs(audio.astype(np.float64))
-    smooth_samples = max(1, int(smooth_ms / 1000.0 * sr))
-    return uniform_filter1d(env, size=smooth_samples, mode='constant')
+def _crest_factor(seg: np.ndarray) -> float:
+    r = _rms(seg)
+    return float(np.max(np.abs(seg))) / r if r > 1e-12 else 0.0
 
 
 def _max_ncc(template: np.ndarray, candidate: np.ndarray, max_lag: int) -> float:
-    """Maximum normalized cross-correlation over ±max_lag range."""
     n = min(len(template), len(candidate))
     if n == 0:
         return 0.0
-    t = template[:n].astype(np.float64)
-    c = candidate[:n].astype(np.float64)
-    t_m = t - np.mean(t)
-    t_norm = np.linalg.norm(t_m)
-    if t_norm < 1e-12:
+    t = template[:n].astype(np.float64) - np.mean(template[:n])
+    tn = np.linalg.norm(t)
+    if tn < 1e-12:
         return 0.0
-    best_corr = -1.0
+    best = -1.0
     for lag in range(-max_lag, max_lag + 1):
-        if lag >= 0:
-            t_slice = t_m[:n - lag]
-            c_slice = c[lag:n]
-        else:
-            t_slice = t_m[-lag:n]
-            c_slice = c[:n + lag]
-        if len(t_slice) == 0:
+        t_sl = t[:n - lag] if lag >= 0 else t[-lag:]
+        c_sl = (candidate[lag:n] if lag >= 0 else candidate[:n + lag]).astype(np.float64)
+        if len(t_sl) == 0:
             continue
-        c_slice = c_slice - np.mean(c_slice)
-        c_norm = np.linalg.norm(c_slice)
-        t_sl_norm = np.linalg.norm(t_slice)
-        if c_norm < 1e-12 or t_sl_norm < 1e-12:
+        c_sl -= np.mean(c_sl)
+        cn = np.linalg.norm(c_sl)
+        tn2 = np.linalg.norm(t_sl)
+        if cn < 1e-12 or tn2 < 1e-12:
             continue
-        corr = float(np.dot(t_slice, c_slice) / (t_sl_norm * c_norm))
-        if corr > best_corr:
-            best_corr = corr
-    return best_corr
+        corr = float(np.dot(t_sl / tn2, c_sl / cn))
+        if corr > best:
+            best = corr
+    return best
 
 
-def _crest_factor(segment: np.ndarray) -> float:
-    """Peak-to-RMS ratio."""
-    rms = _rms(segment)
-    if rms < 1e-12:
-        return 0.0
-    return float(np.max(np.abs(segment))) / rms
-
-
-def _bandpass(seg, sr, low, high):
-    """Butterworth bandpass filter."""
+def _bandpass(seg: np.ndarray, sr: int, low: int, high: int) -> np.ndarray:
     nyq = sr / 2.0
-    lo = max(low, 1) / nyq
-    hi = min(high, nyq - 1) / nyq
+    lo, hi = max(low, 1) / nyq, min(high, nyq - 1) / nyq
     if lo >= hi:
         return seg
     sos = signal.butter(4, [lo, hi], btype='band', output='sos')
@@ -144,7 +117,94 @@ def _bandpass(seg, sr, low, high):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  CORE EXTRACTION (V2 + CSV GUIDANCE)
+#  CONSERVATIVE ONSET DETECTION  (only for offset calculation)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _detect_prominent_onsets(mono: np.ndarray, sr: int) -> np.ndarray:
+    """
+    Detect only PROMINENT transients using amplitude envelope + high prominence.
+    Conservative: better to miss some than to over-detect.
+    Used ONLY for auto-offset, NOT for extraction.
+    """
+    amp_env = _amplitude_envelope(mono, sr, ms=3.0)
+    min_dist = max(1, int(0.040 * sr))   # 40 ms min gap
+
+    # Prominence = peak must stand out from local baseline by this much.
+    # Use percentile gap: p90 - p50 ensures only the top transients pass.
+    p90 = float(np.percentile(amp_env, 90))
+    p50 = float(np.percentile(amp_env, 50))
+    prom = max(p90 - p50, p50 * 3.0, 1e-6)
+
+    peaks, _ = find_peaks(amp_env, distance=min_dist, prominence=prom)
+    return peaks
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  AUTO OFFSET  — histogram-based cross-correlation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def auto_calculate_offset(audio: np.ndarray, sr: int,
+                          keystroke_log: List[Dict],
+                          max_offset_sec: float = 2.0) -> float:
+    """
+    Histogram-of-differences offset estimation:
+      1. Detect prominent onsets globally (conservative — few false positives).
+      2. For every (onset, csv_time) pair, compute diff = onset − csv_time.
+      3. Histogram with 10 ms bins → tallest bin = true offset.
+      4. Refine with median of nearby diffs.
+    """
+    if not keystroke_log or len(keystroke_log) < 2:
+        return 0.0
+
+    mono = _to_mono(audio)
+    csv_times = sorted([float(e['relative_time']) for e in keystroke_log])
+    csv_arr = np.array(csv_times)
+
+    onset_samples = _detect_prominent_onsets(mono, sr)
+    if len(onset_samples) < 3:
+        print(f"  Auto-offset: only {len(onset_samples)} onsets, returning 0")
+        return 0.0
+
+    onset_times = onset_samples.astype(np.float64) / sr
+    print(f"  Auto-offset: {len(onset_times)} onsets, {len(csv_times)} CSV entries")
+
+    # All pairwise diffs within range
+    diffs = []
+    for ot in onset_times:
+        d = ot - csv_arr
+        mask = np.abs(d) <= max_offset_sec
+        diffs.extend(d[mask].tolist())
+
+    if len(diffs) < 3:
+        print(f"  Auto-offset: too few diffs ({len(diffs)}), returning 0")
+        return 0.0
+    diffs = np.array(diffs)
+
+    # Histogram with 10 ms bins
+    bin_w = 0.010
+    lo_edge = float(np.floor(diffs.min() / bin_w) * bin_w)
+    hi_edge = float(np.ceil(diffs.max() / bin_w) * bin_w) + bin_w
+    bins = np.arange(lo_edge, hi_edge + bin_w / 2, bin_w)
+    hist, edges = np.histogram(diffs, bins=bins)
+
+    best_idx = int(np.argmax(hist))
+    rough = (edges[best_idx] + edges[best_idx + 1]) / 2.0
+
+    # Refine: median of diffs within ±30 ms of rough
+    nearby = diffs[np.abs(diffs - rough) <= 0.030]
+    result = float(np.median(nearby)) if len(nearby) >= 3 else rough
+
+    # Report match quality
+    shifted = csv_arr + result
+    matched = sum(1 for sc in shifted if np.any(np.abs(onset_times - sc) < 0.060))
+    pct = 100.0 * matched / len(csv_times) if csv_times else 0
+    print(f"  Auto-offset: {result:+.4f} s  "
+          f"(matches {matched}/{len(csv_times)} = {pct:.0f}%)")
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  CORE EXTRACTION  — strictly CSV-guided, one segment per entry
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def extract_keystrokes(
@@ -152,11 +212,12 @@ def extract_keystrokes(
     sr: int,
     keystroke_log: List[Dict],
     *,
+    offset: float = 0.0,
     segment_duration: float = 0.430,
     pre_trigger: float = 0.10,
     search_radius_sec: float = 0.25,
-    peak_snr_db: float = 6.0,
-    min_crest_factor: float = 1.8,
+    peak_snr_db: float = 3.0,
+    min_crest_factor: float = 1.2,
     min_peak_amplitude: float = 0.0,
     enable_template_verify: bool = True,
     template_corr_threshold: float = 0.20,
@@ -164,727 +225,598 @@ def extract_keystrokes(
     enable_bandpass: bool = False,
     bandpass_low: int = 50,
     bandpass_high: int = 5000,
-    overlap_guard_sec: float = 0.02,
+    overlap_guard_sec: float = 0.015,
     verbose: bool = True,
     progress_callback=None,
 ) -> Tuple[List[Dict], Dict]:
-    """CSV-guided extraction with v2 peak-finding + quality gates."""
+    """
+    CSV-guided extraction.  For each CSV entry:
+      1. Compute adjusted_time = csv_time + offset
+      2. Search ±search_radius for the significant peak closest to adj_time
+      3. Cut one segment of segment_duration centred pre_trigger before peak
+      4. Apply quality gates; reject if truly silent/noisy
 
-    if audio.ndim == 2:
-        mono = np.mean(audio, axis=1).astype(np.float64)
-        is_stereo = True
-    else:
-        mono = audio.astype(np.float64)
-        is_stereo = False
-
+    Output: exactly 0 or 1 segment per CSV entry.  The 430 ms window
+    naturally includes both press and release transients.
+    """
+    is_stereo = audio.ndim == 2
+    mono = _to_mono(audio)
     n_audio = len(mono)
-    noise_floor_rms = _estimate_noise_floor(mono, sr)
-    
+
+    noise_rms = _estimate_noise_floor(mono, sr)
+
+    # Estimate noise peak for amplitude gate
     frame_len = int(0.05 * sr)
     n_frames = n_audio // frame_len
     if n_frames > 5:
         frames = mono[:n_frames * frame_len].reshape(n_frames, frame_len)
         frame_rms = np.sqrt(np.mean(frames ** 2, axis=1))
-        quiet_mask = frame_rms <= np.percentile(frame_rms, 15)
-        if np.any(quiet_mask):
-            quiet_audio = frames[quiet_mask].ravel()
-            noise_peak_amp = float(np.percentile(np.abs(quiet_audio), 99))
-        else:
-            noise_peak_amp = noise_floor_rms * 3
+        quiet = frames[frame_rms <= np.percentile(frame_rms, 15)].ravel()
+        noise_peak = float(np.percentile(np.abs(quiet), 99)) if len(quiet) else noise_rms * 3
     else:
-        noise_peak_amp = noise_floor_rms * 3
+        noise_peak = noise_rms * 3
 
     if min_peak_amplitude <= 0:
-        min_peak_amplitude = noise_peak_amp * 2.0
+        min_peak_amplitude = noise_peak * 1.2
 
-    snr_linear = 10 ** (peak_snr_db / 20.0)
-    local_energy_threshold = noise_floor_rms * snr_linear
+    local_snr_thresh = noise_rms * (10 ** (peak_snr_db / 20.0))
 
     if verbose:
-        print(f"\n  ┌─ Recording Analysis ─────────────────────────")
-        print(f"  │ Audio length   : {n_audio/sr:.2f}s")
-        print(f"  │ Noise floor RMS: {noise_floor_rms:.6f}")
-        print(f"  │ Min peak amp   : {min_peak_amplitude:.6f}")
-        print(f"  │ CSV entries    : {len(keystroke_log)}")
-        print(f"  └────────────────────────────────────────────────")
-
-    ste_2ms = _short_time_energy(mono, max(1, int(0.002 * sr)))
-    ste_10ms = _short_time_energy(mono, max(1, int(0.010 * sr)))
-    ste_50ms = _short_time_energy(mono, max(1, int(0.050 * sr)))
-    ste_combined = np.cbrt(ste_2ms * ste_10ms * ste_50ms)
+        print(f"\n  ┌─ Extraction ─────────────────────────────────")
+        print(f"  │ Audio  : {n_audio / sr:.2f} s  offset: {offset:+.4f} s")
+        print(f"  │ Noise  : {noise_rms:.6f}  min_peak: {min_peak_amplitude:.6f}")
+        print(f"  │ CSV    : {len(keystroke_log)}")
+        print(f"  └──────────────────────────────────────────────")
 
     sorted_log = sorted(keystroke_log, key=lambda x: x['relative_time'])
     n_total = len(sorted_log)
 
-    duration_samples = int(segment_duration * sr)
-    pre_samples = int(pre_trigger * sr)
-    search_radius = int(search_radius_sec * sr)
-    overlap_guard = int(overlap_guard_sec * sr)
+    dur_s = int(segment_duration * sr)
+    pre_s = int(pre_trigger * sr)
+    rad_s = int(search_radius_sec * sr)
+    ovlp_s = int(overlap_guard_sec * sr)
 
     segments: List[Dict] = []
     template_bank: List[np.ndarray] = []
-    avg_template_env: Optional[np.ndarray] = None
-    last_peak_sample = -999999
-    rejection_log = []
+    avg_tpl_env = None
+    last_peak = -999999
 
-    stats = {
-        'total_csv': n_total,
-        'saved': 0,
-        'rejected_silent': 0,
-        'rejected_low_snr': 0,
-        'rejected_low_peak': 0,
-        'rejected_low_transient': 0,
-        'rejected_template': 0,
-        'rejected_overlap': 0,
-        'noise_floor_rms': noise_floor_rms,
-        'noise_peak_amp': noise_peak_amp,
-        'min_peak_amplitude': min_peak_amplitude,
-    }
+    stats = dict(total_csv=n_total, saved=0,
+                 rejected_silent=0, rejected_low_snr=0,
+                 rejected_low_peak=0, rejected_low_transient=0,
+                 rejected_template=0, rejected_overlap=0)
 
     for idx, entry in enumerate(sorted_log):
-        csv_time = entry['relative_time']
-        csv_sample = int(csv_time * sr)
+        csv_t = entry['relative_time']
+        adj_t = max(0.0, csv_t + offset)
+        adj_s = int(adj_t * sr)
         key = entry['key']
-        timestamp = entry.get('timestamp', '')
 
-        # CSV-guided search: find peak near CSV time
-        lo = max(0, csv_sample - search_radius)
-        hi = min(n_audio, csv_sample + search_radius)
+        # ── Find peak: closest significant peak to adjusted CSV time ─────
+        #
+        # The offset was calibrated to align CSV times with PRESS onsets.
+        # So the press peak is near adj_s; the release is 60–150 ms later.
+        # Picking argmax would grab a louder release → press gets cut off.
+        # Instead: find all significant peaks, pick the one nearest adj_s.
+        #
+        lo = max(0, adj_s - rad_s)
+        hi = min(n_audio, adj_s + rad_s)
 
         if hi <= lo:
-            segments.append(_reject(entry, 'boundary'))
+            segments.append(_rej(entry, 'boundary'))
             stats['rejected_silent'] += 1
-            _progress(progress_callback, idx, n_total)
+            _prog(progress_callback, idx, n_total)
             continue
 
-        region_ste = ste_combined[lo:hi]
-        energy_peak = lo + int(np.argmax(region_ste))
-        refine_r = int(0.005 * sr)
-        peak_sample = _find_waveform_peak(mono, energy_peak, refine_r)
+        region = np.abs(mono[lo:hi])
+
+        # Find significant peaks (prominence > 30% of region max)
+        reg_max = float(region.max())
+        min_prom = max(reg_max * 0.15, noise_peak * 0.5, 1e-7)
+        min_d = max(1, int(0.015 * sr))
+        cand_peaks, _ = find_peaks(region, distance=min_d,
+                                    prominence=min_prom)
+
+        if len(cand_peaks) == 0:
+            # No discrete peaks found — use argmax as fallback
+            pk = lo + int(np.argmax(region))
+        elif len(cand_peaks) == 1:
+            pk = lo + int(cand_peaks[0])
+        else:
+            # Pick the peak closest to adj_s (the calibrated press time)
+            abs_peaks = lo + cand_peaks
+            dists = np.abs(abs_peaks - adj_s)
+            pk = int(abs_peaks[np.argmin(dists)])
 
         # Overlap guard
-        if abs(peak_sample - last_peak_sample) < overlap_guard:
-            segments.append(_reject(entry, 'overlap', peak_sample=peak_sample))
+        if abs(pk - last_peak) < ovlp_s:
+            segments.append(_rej(entry, 'overlap', peak_sample=pk))
             stats['rejected_overlap'] += 1
-            _progress(progress_callback, idx, n_total)
+            _prog(progress_callback, idx, n_total)
             continue
 
-        # Peak amplitude gate
-        peak_amp = float(np.abs(mono[peak_sample])) if 0 <= peak_sample < n_audio else 0.0
-        tiny_r = int(0.002 * sr)
-        plo = max(0, peak_sample - tiny_r)
-        phi = min(n_audio, peak_sample + tiny_r)
-        peak_amp = float(np.max(np.abs(mono[plo:phi]))) if phi > plo else peak_amp
-
-        if peak_amp < min_peak_amplitude:
-            segments.append(_reject(entry, 'low_peak', peak_sample=peak_sample, peak_amp=peak_amp))
+        # Peak amplitude
+        tiny = int(0.003 * sr)
+        pa = float(np.max(np.abs(
+            mono[max(0, pk - tiny):min(n_audio, pk + tiny)])))
+        if pa < min_peak_amplitude:
+            segments.append(_rej(entry, 'low_peak', peak_sample=pk, peak_amp=pa))
             stats['rejected_low_peak'] += 1
-            _progress(progress_callback, idx, n_total)
+            _prog(progress_callback, idx, n_total)
             continue
 
-        # Local SNR gate
-        local_rms = _local_peak_rms(mono, peak_sample, sr, window_ms=10.0)
-
-        if local_rms < local_energy_threshold:
-            snr_db = 20.0 * np.log10(max(local_rms, 1e-12) / noise_floor_rms)
-            segments.append(_reject(entry, 'low_snr', peak_sample=peak_sample, snr_db=snr_db, peak_amp=peak_amp))
+        # SNR gate
+        lrms = _local_rms(mono, pk, sr)
+        if lrms < local_snr_thresh:
+            snr = 20.0 * np.log10(max(lrms, 1e-12) / noise_rms)
+            segments.append(_rej(entry, 'low_snr', peak_sample=pk,
+                                 snr_db=snr, peak_amp=pa))
             stats['rejected_low_snr'] += 1
-            _progress(progress_callback, idx, n_total)
+            _prog(progress_callback, idx, n_total)
             continue
 
-        snr_db = 20.0 * np.log10(local_rms / noise_floor_rms)
+        snr = 20.0 * np.log10(lrms / noise_rms)
 
-        # Extract segment
-        start = max(0, peak_sample - pre_samples)
-        end = start + duration_samples
+        # ── Cut segment ──────────────────────────────────────────────────
+        start = max(0, pk - pre_s)
+        end = start + dur_s
         if end > n_audio:
             end = n_audio
-            start = max(0, end - duration_samples)
-
+            start = max(0, end - dur_s)
         seg = mono[start:end]
-        if len(seg) < duration_samples:
-            seg = np.pad(seg, (0, duration_samples - len(seg)))
-        seg = seg[:duration_samples]
+        if len(seg) < dur_s:
+            seg = np.pad(seg, (0, dur_s - len(seg)))
+        seg = seg[:dur_s]
 
-        # Crest factor check
+        # Crest factor
         cf = _crest_factor(seg)
         if cf < min_crest_factor:
-            segments.append(_reject(entry, 'low_transient', peak_sample=peak_sample, snr_db=snr_db, peak_amp=peak_amp, crest=cf))
+            segments.append(_rej(entry, 'low_transient', peak_sample=pk,
+                                 snr_db=snr, peak_amp=pa, crest=cf))
             stats['rejected_low_transient'] += 1
-            _progress(progress_callback, idx, n_total)
+            _prog(progress_callback, idx, n_total)
             continue
 
-        # Template verification
-        template_corr = 1.0
-        if enable_template_verify and avg_template_env is not None:
-            s = seg[:len(avg_template_env)]
-            if len(s) == len(avg_template_env):
-                s_env = _amplitude_envelope(s, sr)
-                lag_samples = int(0.015 * sr)
-                template_corr = _max_ncc(avg_template_env, s_env, lag_samples)
-                if template_corr < template_corr_threshold:
-                    segments.append(_reject(entry, 'template', peak_sample=peak_sample, snr_db=snr_db, peak_amp=peak_amp, template_corr=template_corr))
+        # Template verify
+        tpl_corr = 1.0
+        if enable_template_verify and avg_tpl_env is not None:
+            s = seg[:len(avg_tpl_env)]
+            if len(s) == len(avg_tpl_env):
+                tpl_corr = _max_ncc(avg_tpl_env, _amplitude_envelope(s, sr),
+                                    int(0.015 * sr))
+                if tpl_corr < template_corr_threshold:
+                    segments.append(_rej(entry, 'template', peak_sample=pk,
+                                         snr_db=snr, peak_amp=pa, tpl=tpl_corr))
                     stats['rejected_template'] += 1
-                    _progress(progress_callback, idx, n_total)
+                    _prog(progress_callback, idx, n_total)
                     continue
 
-        # ACCEPTED
-        final_seg = seg.copy()
+        # ── ACCEPTED ─────────────────────────────────────────────────────
+        fseg = seg.copy()
         if enable_bandpass:
-            final_seg = _bandpass(final_seg, sr, bandpass_low, bandpass_high)
-
+            fseg = _bandpass(fseg, sr, bandpass_low, bandpass_high)
         if is_stereo:
-            final_seg = np.column_stack([final_seg, final_seg])
+            fseg = np.column_stack([fseg, fseg])
 
-        segments.append({
-            'audio': final_seg,
-            'key': key,
-            'timestamp': timestamp,
-            'csv_time': csv_time,
-            'peak_sample': peak_sample,
-            'start_sample': start,
-            'end_sample': end,
-            'snr_db': snr_db,
-            'peak_amp': peak_amp,
-            'crest_factor': cf,
-            'template_corr': template_corr,
-            'time_diff': abs(peak_sample / sr - csv_time),
-            'status': 'ok',
-        })
+        segments.append(dict(
+            audio=fseg, key=key,
+            timestamp=entry.get('timestamp', ''),
+            csv_time=entry['relative_time'],
+            peak_sample=pk, start_sample=start, end_sample=end,
+            snr_db=snr, peak_amp=pa, crest_factor=cf,
+            template_corr=tpl_corr,
+            time_diff=abs(pk / sr - adj_t),
+            status='ok',
+        ))
         stats['saved'] += 1
-        last_peak_sample = peak_sample
+        last_peak = pk
 
-        # Build template
+        # Build template bank
         if enable_template_verify and len(template_bank) < template_build_count:
             template_bank.append(seg.copy())
             if len(template_bank) == template_build_count:
-                envelopes = []
+                envs = []
                 for tb in template_bank:
-                    env = _amplitude_envelope(tb, sr)
-                    pk = np.argmax(env)
-                    shift = pre_samples - pk
-                    envelopes.append(np.roll(env, shift))
-                avg_template_env = np.mean(envelopes, axis=0)
+                    e = _amplitude_envelope(tb, sr)
+                    envs.append(np.roll(e, pre_s - int(np.argmax(e))))
+                avg_tpl_env = np.mean(envs, axis=0)
 
-        _progress(progress_callback, idx, n_total)
+        _prog(progress_callback, idx, n_total)
 
     if verbose:
-        print(f"\n  ┌─ Extraction Results ────────────────────────────")
-        print(f"  │ Saved            : {stats['saved']}/{n_total}")
-        print(f"  │ Rejected silent  : {stats['rejected_silent']}")
-        print(f"  │ Rejected low peak: {stats['rejected_low_peak']}")
-        print(f"  │ Rejected low SNR : {stats['rejected_low_snr']}")
-        print(f"  │ Rejected crest   : {stats['rejected_low_transient']}")
-        print(f"  │ Rejected template: {stats['rejected_template']}")
-        print(f"  │ Rejected overlap : {stats['rejected_overlap']}")
-        print(f"  └────────────────────────────────────────────────────")
+        s = stats
+        print(f"  Saved {s['saved']}/{n_total}  "
+              f"(boundary={s['rejected_silent']} peak={s['rejected_low_peak']} "
+              f"snr={s['rejected_low_snr']} crest={s['rejected_low_transient']} "
+              f"tpl={s['rejected_template']} ovlp={s['rejected_overlap']})")
 
     return segments, stats
 
 
-def _reject(entry, reason, **extra):
-    """Build a rejected-segment record."""
-    return {
-        'audio': None,
-        'key': entry['key'],
-        'timestamp': entry.get('timestamp', ''),
-        'csv_time': entry['relative_time'],
-        'peak_sample': extra.get('peak_sample', 0),
-        'start_sample': 0,
-        'snr_db': extra.get('snr_db', 0.0),
-        'peak_amp': extra.get('peak_amp', 0.0),
-        'crest_factor': extra.get('crest', 0.0),
-        'template_corr': extra.get('template_corr', 0.0),
-        'time_diff': 0.0,
-        'status': reason,
-    }
+def _rej(entry, reason, **kw):
+    return dict(audio=None, key=entry['key'],
+                timestamp=entry.get('timestamp', ''),
+                csv_time=entry['relative_time'],
+                peak_sample=kw.get('peak_sample', 0),
+                start_sample=0, end_sample=0,
+                snr_db=kw.get('snr_db', 0.0),
+                peak_amp=kw.get('peak_amp', 0.0),
+                crest_factor=kw.get('crest', 0.0),
+                template_corr=kw.get('tpl', 0.0),
+                time_diff=0.0, status=reason)
 
 
-def _progress(cb, idx, total):
+def _prog(cb, idx, total):
     if cb:
         cb(idx + 1, total)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  INTERACTIVE VERIFICATION VIEWER
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class InteractiveVerificationViewer:
-    """Full-audio verification viewer with zoom, pan, and segment navigation."""
-
-    def __init__(self, parent, audio_data, sr, segments):
-        self.window = tk.Toplevel(parent)
-        self.window.title("Verification Viewer - Interactive Full Audio")
-        self.window.geometry("1400x700")
-        
-        self.audio_data = audio_data
-        self.sr = sr
-        self.segments = [s for s in segments if s['status'] == 'ok']
-        
-        self.fig = None
-        self.canvas = None
-        self.ax = None
-        self.line_csv = None
-        self.line_peak = None
-        self.spans = []
-        self.current_zoom = None
-        
-        self.build_ui()
-        self.draw_full_audio()
-
-    def build_ui(self):
-        # Controls frame
-        ctrl_frame = tk.Frame(self.window)
-        ctrl_frame.pack(fill=tk.X, padx=5, pady=5)
-        
-        # Zoom controls
-        tk.Label(ctrl_frame, text="Zoom:", font=("Arial", 9)).pack(side=tk.LEFT, padx=5)
-        tk.Button(ctrl_frame, text="Fit All", command=self.zoom_fit).pack(side=tk.LEFT, padx=2)
-        tk.Button(ctrl_frame, text="Zoom In", command=self.zoom_in).pack(side=tk.LEFT, padx=2)
-        tk.Button(ctrl_frame, text="Zoom Out", command=self.zoom_out).pack(side=tk.LEFT, padx=2)
-        
-        # Navigation
-        tk.Label(ctrl_frame, text="| Navigate:", font=("Arial", 9)).pack(side=tk.LEFT, padx=15)
-        tk.Button(ctrl_frame, text="← Left", command=self.pan_left).pack(side=tk.LEFT, padx=2)
-        tk.Button(ctrl_frame, text="Right →", command=self.pan_right).pack(side=tk.LEFT, padx=2)
-        
-        # Segment slider
-        tk.Label(ctrl_frame, text="| Segment:", font=("Arial", 9)).pack(side=tk.LEFT, padx=15)
-        self.seg_var = tk.IntVar(value=0)
-        self.seg_slider = tk.Scale(ctrl_frame, from_=0, to=max(0, len(self.segments)-1),
-                                    orient=tk.HORIZONTAL, variable=self.seg_var,
-                                    command=self.on_segment_selected, length=200)
-        self.seg_slider.pack(side=tk.LEFT, padx=5)
-        
-        self.seg_label = tk.Label(ctrl_frame, text="0/0", font=("Arial", 9))
-        self.seg_label.pack(side=tk.LEFT, padx=5)
-        
-        # Canvas frame
-        canvas_frame = tk.Frame(self.window)
-        canvas_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        self.fig, self.ax = plt.subplots(figsize=(14, 6))
-        self.canvas = FigureCanvasTkAgg(self.fig, master=canvas_frame)
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        
-        # Bind mouse events for pan
-        self.canvas.mpl_connect('button_press_event', self.on_press)
-        self.canvas.mpl_connect('button_release_event', self.on_release)
-        self.canvas.mpl_connect('motion_notify_event', self.on_motion)
-        self.press_x = None
-
-    def draw_full_audio(self):
-        """Draw full audio with all segments highlighted."""
-        self.ax.clear()
-        
-        if self.audio_data.ndim == 2:
-            mono = np.mean(self.audio_data, axis=1)
-        else:
-            mono = self.audio_data
-        
-        time_axis = np.arange(len(mono)) / self.sr
-        self.ax.plot(time_axis, mono, 'b-', linewidth=0.5, alpha=0.6, label='Full Audio')
-        
-        # Draw segments
-        colors = plt.cm.tab20(np.linspace(0, 1, 20))
-        for i, seg in enumerate(self.segments):
-            start_time = seg['start_sample'] / self.sr
-            end_time = seg['end_sample'] / self.sr
-            self.ax.axvspan(start_time, end_time, alpha=0.2, color=colors[i % 20])
-        
-        self.ax.set_xlabel('Time (s)', fontsize=11)
-        self.ax.set_ylabel('Amplitude', fontsize=11)
-        self.ax.set_title('Full Recording with Extracted Segments', fontsize=13, fontweight='bold')
-        self.ax.grid(True, alpha=0.3)
-        self.current_zoom = (0, len(mono) / self.sr)
-        self.fig.tight_layout()
-        self.canvas.draw()
-        
-        self.seg_slider.config(to=max(0, len(self.segments)-1))
-        self.update_seg_label()
-
-    def on_segment_selected(self, val):
-        """Highlight selected segment and zoom to it."""
-        idx = int(val)
-        if 0 <= idx < len(self.segments):
-            seg = self.segments[idx]
-            start_time = seg['start_sample'] / self.sr
-            end_time = seg['end_sample'] / self.sr
-            
-            margin = (end_time - start_time) * 0.5
-            self.ax.set_xlim(max(0, start_time - margin), end_time + margin)
-            self.canvas.draw()
-            self.update_seg_label()
-
-    def update_seg_label(self):
-        """Update segment counter label."""
-        total = len(self.segments)
-        idx = self.seg_var.get()
-        self.seg_label.config(text=f"{idx+1}/{total}" if total > 0 else "0/0")
-
-    def zoom_fit(self):
-        """Zoom to fit all audio."""
-        self.ax.set_xlim(0, len(self.audio_data) / self.sr)
-        self.canvas.draw()
-
-    def zoom_in(self):
-        """Zoom in by 50%."""
-        xlim = self.ax.get_xlim()
-        center = (xlim[0] + xlim[1]) / 2
-        width = (xlim[1] - xlim[0]) / 3
-        self.ax.set_xlim(center - width, center + width)
-        self.canvas.draw()
-
-    def zoom_out(self):
-        """Zoom out by 50%."""
-        xlim = self.ax.get_xlim()
-        center = (xlim[0] + xlim[1]) / 2
-        width = (xlim[1] - xlim[0]) * 1.5
-        self.ax.set_xlim(max(0, center - width), min(len(self.audio_data)/self.sr, center + width))
-        self.canvas.draw()
-
-    def pan_left(self):
-        """Pan left by 20%."""
-        xlim = self.ax.get_xlim()
-        width = xlim[1] - xlim[0]
-        shift = width * 0.2
-        self.ax.set_xlim(max(0, xlim[0] - shift), max(width, xlim[1] - shift))
-        self.canvas.draw()
-
-    def pan_right(self):
-        """Pan right by 20%."""
-        xlim = self.ax.get_xlim()
-        width = xlim[1] - xlim[0]
-        shift = width * 0.2
-        max_time = len(self.audio_data) / self.sr
-        self.ax.set_xlim(min(max_time - width, xlim[0] + shift), min(max_time, xlim[1] + shift))
-        self.canvas.draw()
-
-    def on_press(self, event):
-        """Start pan."""
-        if event.inaxes == self.ax:
-            self.press_x = event.xdata
-
-    def on_release(self, event):
-        """End pan."""
-        self.press_x = None
-
-    def on_motion(self, event):
-        """Pan during drag."""
-        if self.press_x is not None and event.inaxes == self.ax:
-            dx = event.xdata - self.press_x
-            xlim = self.ax.get_xlim()
-            shift = -dx
-            max_time = len(self.audio_data) / self.sr
-            width = xlim[1] - xlim[0]
-            self.ax.set_xlim(max(0, xlim[0] + shift), min(max_time, xlim[1] + shift))
-            self.canvas.draw()
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  UI TAB
+#  UI — two-panel layout
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class DataSegmenterTab:
-    """Ultimate keystroke segmenter with preview and verification."""
+    """
+    Left  — scrollable controls
+    Right — matplotlib canvas (offset-preview OR full-audio viewer)
+    """
 
     def __init__(self, parent, config, audio_handler):
         self.parent = parent
         self.config = config
-        self.audio = audio_handler
+        self.audio  = audio_handler
 
-        self.current_session_path = None
-        self.batch_sessions = None
-        self.audio_data = None
-        self.keystroke_log = []
-        self.sample_rate = None
+        # Session state
+        self.current_session_path: Optional[str] = None
+        self.batch_sessions: Optional[List[str]] = None
+        self.session_cache: Dict[str, tuple] = {}
+
+        # Preview state
+        self.prev_audio = None
+        self.prev_log:  List[Dict] = []
+        self.prev_sr:   Optional[int] = None
+        self.prev_path: Optional[str] = None
+        self.prev_offset: float = 0.0
+
+        # Offset token (guards stale background results)
+        self._offset_token: int = 0
+
+        # Viewer state
+        self.viewer_sessions: Dict[str, tuple] = {}
+        self.viewer_audio    = None
+        self.viewer_sr:      Optional[int] = None
+        self.viewer_segments: Optional[List[Dict]] = None
+        self._viewer_ok_segs: List[Dict] = []
+        self.viewer_session_var = tk.StringVar()
+
         self._cancel_flag = False
-        self.last_segments = None
+        self._drag_x: Optional[float] = None
 
-        # Parameters
-        self.segment_duration = tk.DoubleVar(value=0.430)
-        self.pre_trigger = tk.DoubleVar(value=0.10)
-        self.search_radius = tk.DoubleVar(value=0.25)
-        self.peak_snr_db = tk.DoubleVar(value=3.0)
-        self.min_crest_factor = tk.DoubleVar(value=1.8)
-        self.enable_template = tk.BooleanVar(value=True)
+        # Tk vars
+        self.segment_duration     = tk.DoubleVar(value=0.430)
+        self.pre_trigger          = tk.DoubleVar(value=0.10)
+        self.search_radius        = tk.DoubleVar(value=0.25)
+        self.peak_snr_db          = tk.DoubleVar(value=3.0)
+        self.min_crest_factor     = tk.DoubleVar(value=1.2)
+        self.enable_template      = tk.BooleanVar(value=True)
         self.template_corr_thresh = tk.DoubleVar(value=0.20)
-        self.enable_filtering = tk.BooleanVar(value=False)
-        self.filter_low = tk.IntVar(value=50)
-        self.filter_high = tk.IntVar(value=5000)
-        self.time_offset = tk.DoubleVar(value=0.0)
-        self.output_name_var = tk.StringVar(value=f"segmented_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+        self.enable_filtering     = tk.BooleanVar(value=False)
+        self.filter_low           = tk.IntVar(value=50)
+        self.filter_high          = tk.IntVar(value=5000)
+        self.output_name_var      = tk.StringVar(
+            value=f"segmented_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+        self.fine_tune            = tk.DoubleVar(value=0.0)
+        self.preview_session_var  = tk.StringVar()
+        self.seg_var              = tk.IntVar(value=0)
 
-        self.preview_canvas_frame = None
-        self.preview_canvas = None
+        self.right_mode = 'preview'
+        self._build_ui()
 
-        self.build_ui()
+    # ── layout ────────────────────────────────────────────────────────────────
 
-    def _safe_ui(self, func):
-        try:
-            self.parent.after_idle(func)
-        except Exception:
-            pass
+    def _build_ui(self):
+        self.paned = tk.PanedWindow(self.parent, orient=tk.HORIZONTAL,
+                                    sashwidth=6, sashrelief=tk.RAISED)
+        self.paned.pack(fill=tk.BOTH, expand=True)
 
-    def build_ui(self):
-        canvas = tk.Canvas(self.parent)
-        scrollbar = tk.Scrollbar(self.parent, orient="vertical", command=canvas.yview)
-        scrollable = tk.Frame(canvas)
-        scrollable.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=scrollable, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+        # Left pane (scrollable)
+        lo = tk.Frame(self.paned)
+        self.paned.add(lo, minsize=540)
+        lc = tk.Canvas(lo, width=535, highlightthickness=0)
+        ls = tk.Scrollbar(lo, orient='vertical', command=lc.yview)
+        inner = tk.Frame(lc)
+        inner.bind('<Configure>',
+                   lambda e: lc.configure(scrollregion=lc.bbox('all')))
+        lc.create_window((0, 0), window=inner, anchor='nw')
+        lc.configure(yscrollcommand=ls.set)
+        ls.pack(side='right', fill='y')
+        lc.pack(side='left', fill='both', expand=True)
+        lc.bind_all('<MouseWheel>',
+                    lambda e: lc.yview_scroll(int(-e.delta / 120), 'units'))
+        self._build_left(inner)
 
-        main = tk.Frame(scrollable, padx=20, pady=20)
-        main.pack(fill=tk.BOTH, expand=True)
+        # Right pane
+        ro = tk.Frame(self.paned, bg='#f5f5f5')
+        self.paned.add(ro, minsize=460)
+        ro.grid_rowconfigure(2, weight=1)
+        ro.grid_columnconfigure(0, weight=1)
+        self._build_right(ro)
 
-        tk.Label(main, text="Ultimate Keystroke Segmenter v2",
-                 font=("Arial", 16, "bold"), fg="#1976D2").pack(pady=(0, 20))
+    # ── left controls ─────────────────────────────────────────────────────────
+
+    def _build_left(self, main):
+        tk.Label(main, text='Keystroke Segmenter v5',
+                 font=('Arial', 15, 'bold'), fg='#1565C0').pack(pady=(10, 16))
 
         # 1. Load
-        load_f = tk.LabelFrame(main, text="1. Load Session",
-                               font=("Arial", 10, "bold"), padx=15, pady=15)
-        load_f.pack(fill=tk.X, pady=(0, 15))
-        tk.Button(load_f, text="Browse Session Folder", command=self.browse_session,
-                  bg="#2196F3", fg="white", font=("Arial", 10, "bold")).pack(anchor=tk.W, pady=5)
-        self.session_label = tk.Label(load_f, text="No session loaded", font=("Arial", 9), fg="gray")
-        self.session_label.pack(pady=2)
-        self.session_info_label = tk.Label(load_f, text="", font=("Arial", 9), fg="#1976D2")
-        self.session_info_label.pack(pady=2)
+        f1 = tk.LabelFrame(main, text='1. Load Session',
+                           font=('Arial', 10, 'bold'), padx=12, pady=10)
+        f1.pack(fill=tk.X, padx=10, pady=(0, 10))
+        tk.Button(f1, text='Browse Session / Batch Folder',
+                  command=self._browse,
+                  bg='#1976D2', fg='white',
+                  font=('Arial', 10, 'bold')).pack(anchor=tk.W, pady=4)
+        self.session_label = tk.Label(f1, text='No session loaded',
+                                      font=('Arial', 9), fg='gray')
+        self.session_label.pack(anchor=tk.W)
+        self.session_info = tk.Label(f1, text='', font=('Arial', 9), fg='#1565C0')
+        self.session_info.pack(anchor=tk.W, pady=(2, 0))
 
-        # 2. Visual Offset Preview
-        preview_f = tk.LabelFrame(main, text="2. Visual Offset Adjustment (Preview First Keystroke)",
-                                  font=("Arial", 10, "bold"), padx=15, pady=15)
-        preview_f.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+        # Batch selector
+        self.batch_sel_frame = tk.Frame(f1)
+        self.batch_sel_frame.pack(fill=tk.X, pady=(6, 0))
+        tk.Label(self.batch_sel_frame, text='Preview:',
+                 font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=4)
+        self.session_combo = ttk.Combobox(
+            self.batch_sel_frame, textvariable=self.preview_session_var,
+            state='readonly', width=38)
+        self.session_combo.pack(side=tk.LEFT, padx=4)
+        self.session_combo.bind('<<ComboboxSelected>>', self._on_combo_select)
+        self.batch_sel_frame.pack_forget()
 
-        # Preview canvas
-        self.preview_canvas_frame = tk.Frame(preview_f, bg='white', height=250)
-        self.preview_canvas_frame.pack(fill=tk.BOTH, expand=True, pady=8)
-        self.preview_canvas_frame.pack_propagate(False)
-
-        # Offset slider
-        offset_row = tk.Frame(preview_f)
-        offset_row.pack(fill=tk.X, pady=8)
-        tk.Label(offset_row, text="Time Offset (s):", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=5)
-        offset_slider = tk.Scale(offset_row, from_=-1.0, to=1.0, resolution=0.001,
-                                orient=tk.HORIZONTAL, variable=self.time_offset,
-                                command=self._on_offset_changed, length=400)
-        offset_slider.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
-
-        # Preset buttons
-        preset_row = tk.Frame(preview_f)
-        preset_row.pack(fill=tk.X, pady=5)
-        tk.Label(preset_row, text="Presets:", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=5)
-        for label, offset in [("-50ms", -0.050), ("-10ms", -0.010), ("0ms", 0.0), ("+10ms", 0.010), ("+50ms", 0.050)]:
-            tk.Button(preset_row, text=label, width=8,
-                     command=lambda o=offset: self._set_offset(o)).pack(side=tk.LEFT, padx=3)
-
-        # 3. Parameters
-        param_f = tk.LabelFrame(main, text="2. Segmentation Parameters",
-                                font=("Arial", 10, "bold"), padx=15, pady=15)
-        param_f.pack(fill=tk.X, pady=(0, 15))
-
-        self._slider(param_f, "Segment duration (s)", self.segment_duration, 0.1, 1.0, 0.01)
-        self._slider(param_f, "Pre-trigger (s)", self.pre_trigger, 0.0, 0.3, 0.01)
-        self._slider(param_f, "Search radius (s)", self.search_radius, 0.05, 0.50, 0.01)
-
-        ttk.Separator(param_f, orient='horizontal').pack(fill=tk.X, pady=8)
-        tk.Label(param_f, text="Quality Gates", font=("Arial", 9, "bold"), fg="#666").pack(anchor=tk.W)
-
-        self._slider(param_f, "Peak SNR (dB)", self.peak_snr_db, 0.0, 15.0, 0.5)
-        self._slider(param_f, "Min crest factor", self.min_crest_factor, 1.0, 6.0, 0.1)
-
-        ttk.Separator(param_f, orient='horizontal').pack(fill=tk.X, pady=8)
-        tk.Checkbutton(param_f, text="Template verification",
-                       variable=self.enable_template, font=("Arial", 9, "bold")).pack(anchor=tk.W, pady=3)
-        self._slider(param_f, "Template threshold", self.template_corr_thresh, 0.0, 0.8, 0.05)
-
-        ttk.Separator(param_f, orient='horizontal').pack(fill=tk.X, pady=8)
-        tk.Checkbutton(param_f, text="Bandpass filter",
-                       variable=self.enable_filtering, command=self._toggle_filter,
-                       font=("Arial", 9, "bold")).pack(anchor=tk.W, pady=3)
-        filt_row = tk.Frame(param_f)
-        filt_row.pack(fill=tk.X, pady=3)
-        tk.Label(filt_row, text="Low Hz:").pack(side=tk.LEFT, padx=5)
-        self.filter_low_entry = tk.Entry(filt_row, textvariable=self.filter_low, width=7)
-        self.filter_low_entry.pack(side=tk.LEFT, padx=3)
-        tk.Label(filt_row, text="High Hz:").pack(side=tk.LEFT, padx=10)
-        self.filter_high_entry = tk.Entry(filt_row, textvariable=self.filter_high, width=7)
-        self.filter_high_entry.pack(side=tk.LEFT, padx=3)
-
-        preset_row = tk.Frame(param_f)
-        preset_row.pack(fill=tk.X, pady=3)
-        for name, lo, hi in [("50–5kHz", 50, 5000), ("50–3kHz", 50, 3000), ("50–8kHz", 50, 8000)]:
-            tk.Button(preset_row, text=name,
-                      command=lambda l=lo, h=hi: self._set_filter(l, h)).pack(side=tk.LEFT, padx=3)
-
-        # 3. Output
-        out_f = tk.LabelFrame(main, text="3. Output",
-                              font=("Arial", 10, "bold"), padx=15, pady=15)
-        out_f.pack(fill=tk.X, pady=(0, 15))
-        out_row = tk.Frame(out_f)
-        out_row.pack(fill=tk.X, pady=5)
-        tk.Label(out_row, text="Output folder:", width=14, anchor=tk.W).pack(side=tk.LEFT, padx=5)
-        tk.Entry(out_row, textvariable=self.output_name_var, width=40).pack(side=tk.LEFT, padx=5)
-
-        # 4. Process
-        proc_f = tk.LabelFrame(main, text="4. Process",
-                               font=("Arial", 10, "bold"), padx=15, pady=15)
-        proc_f.pack(fill=tk.X, pady=(0, 15))
-
-        self.progress_var = tk.DoubleVar()
-        self.progress_bar = ttk.Progressbar(proc_f, variable=self.progress_var, maximum=100, length=400)
-        self.progress_bar.pack(pady=8)
-        self.progress_label = tk.Label(proc_f, text="Ready", font=("Arial", 10), fg="#424242")
-        self.progress_label.pack(pady=3)
-
-        btn_row = tk.Frame(proc_f)
-        btn_row.pack(pady=8)
-        self.process_btn = tk.Button(btn_row, text="Start Segmentation",
-                                     command=self.start_segmentation,
-                                     bg="#4CAF50", fg="white",
-                                     font=("Arial", 11, "bold"),
-                                     width=18, height=2, state=tk.DISABLED)
-        self.process_btn.pack(side=tk.LEFT, padx=10)
-        tk.Button(btn_row, text="Cancel", command=self._cancel,
-                 font=("Arial", 11), width=12, height=2).pack(side=tk.LEFT, padx=10)
-
-        # 5. Results
-        res_f = tk.LabelFrame(main, text="5. Results & Verification",
-                              font=("Arial", 10, "bold"), padx=15, pady=15)
-        res_f.pack(fill=tk.BOTH, expand=True)
-        self.results_text = tk.Text(res_f, height=12, font=("Courier", 9))
-        self.results_text.pack(fill=tk.BOTH, expand=True)
-
-        self.verify_btn = tk.Button(res_f, text="🔍 View Interactive Full Audio with Segments",
-                                    command=self.view_verification,
-                                    bg="#FF9800", fg="white", font=("Arial", 10, "bold"),
-                                    state=tk.DISABLED)
-        self.verify_btn.pack(pady=8)
-
-    def _slider(self, parent, label, var, lo, hi, res):
-        row = tk.Frame(parent)
-        row.pack(fill=tk.X, pady=2)
-        tk.Label(row, text=label, width=28, anchor=tk.W).pack(side=tk.LEFT, padx=5)
-        tk.Scale(row, from_=lo, to=hi, resolution=res, orient=tk.HORIZONTAL,
-                 variable=var, length=200).pack(side=tk.LEFT, padx=5)
-
-    def _toggle_filter(self):
-        st = tk.NORMAL if self.enable_filtering.get() else tk.DISABLED
-        self.filter_low_entry.config(state=st)
-        self.filter_high_entry.config(state=st)
-
-    def _set_filter(self, lo, hi):
-        self.filter_low.set(lo)
-        self.filter_high.set(hi)
-        self.enable_filtering.set(True)
+        # 2. Parameters
+        f2 = tk.LabelFrame(main, text='2. Segmentation Parameters',
+                           font=('Arial', 10, 'bold'), padx=12, pady=10)
+        f2.pack(fill=tk.X, padx=10, pady=(0, 10))
+        self._slider(f2, 'Segment duration (s)', self.segment_duration, 0.1, 1.0, 0.01)
+        self._slider(f2, 'Pre-trigger (s)',       self.pre_trigger,      0.0, 0.3, 0.01)
+        self._slider(f2, 'Search radius (s)',     self.search_radius,    0.05, 0.50, 0.01)
+        ttk.Separator(f2, orient='horizontal').pack(fill=tk.X, pady=6)
+        tk.Label(f2, text='Quality Gates', font=('Arial', 9, 'bold'),
+                 fg='#555').pack(anchor=tk.W)
+        self._slider(f2, 'Peak SNR (dB)',    self.peak_snr_db,      0.0, 15.0, 0.5)
+        self._slider(f2, 'Min crest factor', self.min_crest_factor, 1.0, 6.0,  0.1)
+        ttk.Separator(f2, orient='horizontal').pack(fill=tk.X, pady=6)
+        tk.Checkbutton(f2, text='Template verification',
+                       variable=self.enable_template,
+                       font=('Arial', 9, 'bold')).pack(anchor=tk.W, pady=2)
+        self._slider(f2, 'Template threshold', self.template_corr_thresh, 0.0, 0.8, 0.05)
+        ttk.Separator(f2, orient='horizontal').pack(fill=tk.X, pady=6)
+        tk.Checkbutton(f2, text='Bandpass filter',
+                       variable=self.enable_filtering,
+                       command=self._toggle_filter,
+                       font=('Arial', 9, 'bold')).pack(anchor=tk.W, pady=2)
+        fr = tk.Frame(f2); fr.pack(fill=tk.X, pady=2)
+        tk.Label(fr, text='Low Hz:').pack(side=tk.LEFT, padx=4)
+        self.flt_lo_entry = tk.Entry(fr, textvariable=self.filter_low, width=7)
+        self.flt_lo_entry.pack(side=tk.LEFT, padx=2)
+        tk.Label(fr, text='High Hz:').pack(side=tk.LEFT, padx=8)
+        self.flt_hi_entry = tk.Entry(fr, textvariable=self.filter_high, width=7)
+        self.flt_hi_entry.pack(side=tk.LEFT, padx=2)
+        pr = tk.Frame(f2); pr.pack(fill=tk.X, pady=2)
+        for nm, lo, hi in [('50–5kHz', 50, 5000), ('50–3kHz', 50, 3000),
+                            ('50–8kHz', 50, 8000)]:
+            tk.Button(pr, text=nm,
+                      command=lambda l=lo, h=hi: self._set_filter(l, h)
+                      ).pack(side=tk.LEFT, padx=2)
         self._toggle_filter()
 
-    def _set_offset(self, offset):
-        """Set offset to preset value."""
-        self.time_offset.set(offset)
+        # 3. Output
+        f3 = tk.LabelFrame(main, text='3. Output',
+                           font=('Arial', 10, 'bold'), padx=12, pady=10)
+        f3.pack(fill=tk.X, padx=10, pady=(0, 10))
+        or_ = tk.Frame(f3); or_.pack(fill=tk.X)
+        tk.Label(or_, text='Output folder:', width=14,
+                 anchor=tk.W).pack(side=tk.LEFT, padx=4)
+        tk.Entry(or_, textvariable=self.output_name_var,
+                 width=34).pack(side=tk.LEFT, padx=4)
+
+        # 4. Process
+        f4 = tk.LabelFrame(main, text='4. Process',
+                           font=('Arial', 10, 'bold'), padx=12, pady=10)
+        f4.pack(fill=tk.X, padx=10, pady=(0, 10))
+        self.prog_var = tk.DoubleVar()
+        ttk.Progressbar(f4, variable=self.prog_var, maximum=100,
+                        length=440).pack(pady=6)
+        self.prog_label = tk.Label(f4, text='Ready',
+                                   font=('Arial', 10), fg='#424242')
+        self.prog_label.pack(pady=2)
+        br = tk.Frame(f4); br.pack(pady=6)
+        self.process_btn = tk.Button(
+            br, text='▶  Start Segmentation',
+            command=self._start_segmentation,
+            bg='#43A047', fg='white', font=('Arial', 11, 'bold'),
+            width=20, height=2, state=tk.DISABLED)
+        self.process_btn.pack(side=tk.LEFT, padx=8)
+        tk.Button(br, text='Cancel',
+                  command=lambda: setattr(self, '_cancel_flag', True),
+                  font=('Arial', 11), width=10, height=2).pack(side=tk.LEFT, padx=8)
+
+        # 5. Results
+        f5 = tk.LabelFrame(main, text='5. Results',
+                           font=('Arial', 10, 'bold'), padx=12, pady=10)
+        f5.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        self.results_text = tk.Text(f5, height=12, font=('Courier', 9))
+        self.results_text.pack(fill=tk.BOTH, expand=True)
+        self.show_viewer_btn = tk.Button(
+            f5, text='🎵  Switch to Full-Audio Viewer',
+            command=self._activate_viewer,
+            bg='#EF6C00', fg='white', font=('Arial', 10, 'bold'),
+            state=tk.DISABLED)
+        self.show_viewer_btn.pack(pady=6)
+
+    # ── right panel ───────────────────────────────────────────────────────────
+
+    def _build_right(self, parent):
+        # Row 0 — toolbar
+        tb = tk.Frame(parent, bg='#e8eaf6', pady=4)
+        tb.grid(row=0, column=0, sticky='ew')
+        tk.Label(tb, text='Panel:', bg='#e8eaf6',
+                 font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=8)
+        self.btn_prev = tk.Button(tb, text='📊 Offset Preview',
+                                  command=self._activate_preview,
+                                  bg='#90CAF9', relief=tk.SUNKEN,
+                                  font=('Arial', 9))
+        self.btn_prev.pack(side=tk.LEFT, padx=3)
+        self.btn_view = tk.Button(tb, text='🎵 Full-Audio Viewer',
+                                  command=self._activate_viewer,
+                                  font=('Arial', 9))
+        self.btn_view.pack(side=tk.LEFT, padx=3)
+
+        # Row 1a — offset strip
+        self.offset_strip = tk.Frame(parent, bg='#f1f8e9', pady=4)
+        self.offset_strip.grid(row=1, column=0, sticky='ew')
+        tk.Label(self.offset_strip, text='Auto offset:',
+                 bg='#f1f8e9', font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=8)
+        self.auto_offset_lbl = tk.Label(
+            self.offset_strip, text='—',
+            bg='#f1f8e9', fg='#1565C0', font=('Arial', 9, 'bold'), width=12)
+        self.auto_offset_lbl.pack(side=tk.LEFT)
+        tk.Label(self.offset_strip, text='Fine-tune (±0.15 s):',
+                 bg='#f1f8e9', font=('Arial', 9)).pack(side=tk.LEFT, padx=(10, 4))
+        tk.Scale(self.offset_strip, from_=-0.15, to=0.15, resolution=0.005,
+                 orient=tk.HORIZONTAL, variable=self.fine_tune,
+                 command=lambda _: self._redraw_preview(),
+                 bg='#f1f8e9', length=170, showvalue=True).pack(side=tk.LEFT)
+        tk.Button(self.offset_strip, text='Reset',
+                  command=lambda: (self.fine_tune.set(0.0),
+                                   self._redraw_preview()),
+                  font=('Arial', 8)).pack(side=tk.LEFT, padx=6)
+
+        # Row 1b — viewer nav (hidden initially)
+        self.viewer_nav = tk.Frame(parent, bg='#fff3e0', pady=4)
+        self.viewer_nav.grid(row=1, column=0, sticky='ew')
+        self.viewer_nav.grid_remove()
+
+        vn_top = tk.Frame(self.viewer_nav, bg='#fff3e0')
+        vn_top.pack(fill=tk.X, pady=(0, 2))
+        tk.Label(vn_top, text='Session:', bg='#fff3e0',
+                 font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=(6, 3))
+        self.viewer_session_combo = ttk.Combobox(
+            vn_top, textvariable=self.viewer_session_var,
+            state='readonly', width=36)
+        self.viewer_session_combo.pack(side=tk.LEFT, padx=2)
+        self.viewer_session_combo.bind(
+            '<<ComboboxSelected>>', self._on_viewer_session_select)
+
+        vn_bot = tk.Frame(self.viewer_nav, bg='#fff3e0')
+        vn_bot.pack(fill=tk.X)
+        for txt, cmd in [('Fit', self._v_fit), ('Zoom+', self._v_zin),
+                          ('Zoom−', self._v_zout), ('◀', self._v_pleft),
+                          ('▶', self._v_pright)]:
+            tk.Button(vn_bot, text=txt, command=cmd,
+                      font=('Arial', 8), bg='#FFE0B2').pack(side=tk.LEFT, padx=2)
+        tk.Label(vn_bot, text=' Seg:', bg='#fff3e0',
+                 font=('Arial', 9)).pack(side=tk.LEFT)
+        self.seg_slider = tk.Scale(
+            vn_bot, from_=0, to=0, orient=tk.HORIZONTAL,
+            variable=self.seg_var, command=self._v_goto_seg,
+            bg='#fff3e0', length=155)
+        self.seg_slider.pack(side=tk.LEFT)
+        self.seg_label = tk.Label(vn_bot, text='0/0',
+                                  bg='#fff3e0', font=('Arial', 9))
+        self.seg_label.pack(side=tk.LEFT, padx=4)
+
+        # Row 2 — canvas
+        cf = tk.Frame(parent, bg='white')
+        cf.grid(row=2, column=0, sticky='nsew')
+
+        if HAS_MATPLOTLIB:
+            self.fig, self.ax = plt.subplots(figsize=(7, 5))
+            self.fig.patch.set_facecolor('white')
+            self.mpl_canvas = FigureCanvasTkAgg(self.fig, master=cf)
+            self.mpl_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+            self._placeholder('Load a session to see the offset preview')
+            self.mpl_canvas.mpl_connect('button_press_event',   self._on_press)
+            self.mpl_canvas.mpl_connect('button_release_event', self._on_release)
+            self.mpl_canvas.mpl_connect('motion_notify_event',  self._on_motion)
+        else:
+            tk.Label(cf, text='pip install matplotlib',
+                     fg='red', font=('Arial', 12)).pack(expand=True)
+
+    # ── mode switching ────────────────────────────────────────────────────────
+
+    def _activate_preview(self):
+        self.right_mode = 'preview'
+        self.btn_prev.config(relief=tk.SUNKEN, bg='#90CAF9')
+        self.btn_view.config(relief=tk.RAISED, bg='#d9d9d9')
+        self.viewer_nav.grid_remove()
+        self.offset_strip.grid()
         self._redraw_preview()
 
-    def _on_offset_changed(self, val):
-        """Called when offset slider changes."""
-        self._redraw_preview()
+    def _activate_viewer(self):
+        self.right_mode = 'viewer'
+        self.btn_view.config(relief=tk.SUNKEN, bg='#90CAF9')
+        self.btn_prev.config(relief=tk.RAISED, bg='#d9d9d9')
+        self.offset_strip.grid_remove()
+        self.viewer_nav.grid()
+        self._redraw_viewer()
 
-    def _redraw_preview(self):
-        """Draw waveform preview with live offset."""
-        if self.audio_data is None or not self.keystroke_log or not HAS_MATPLOTLIB:
-            return
+    def _register_viewer_session(self, name, audio, sr, segs):
+        self.viewer_sessions[name] = (audio, sr, segs)
+        names = list(self.viewer_sessions.keys())
+        self.viewer_session_combo.config(values=names)
+        self.viewer_session_combo.set(name)
+        self.viewer_audio    = audio
+        self.viewer_sr       = sr
+        self.viewer_segments = segs
 
-        try:
-            first = self.keystroke_log[0]
-            csv_time = first['relative_time']
-            adjusted_time = csv_time + self.time_offset.get()
-            duration = self.segment_duration.get()
+    def _on_viewer_session_select(self, _=None):
+        name = self.viewer_session_var.get()
+        if name in self.viewer_sessions:
+            audio, sr, segs = self.viewer_sessions[name]
+            self.viewer_audio    = audio
+            self.viewer_sr       = sr
+            self.viewer_segments = segs
+            self._redraw_viewer()
 
-            adjusted_sample = int(adjusted_time * self.sample_rate)
-            start_sample = adjusted_sample
-            end_sample = start_sample + int(duration * self.sample_rate)
+    # ── session loading ───────────────────────────────────────────────────────
 
-            # Context window (±1s around adjusted time)
-            context_samples = int(1.0 * self.sample_rate)
-            view_start = max(0, adjusted_sample - context_samples)
-            view_end = min(len(self.audio_data), adjusted_sample + context_samples)
-            audio_view = self.audio_data[view_start:view_end]
-            
-            if audio_view.ndim == 2:
-                audio_view = audio_view.mean(axis=1)
-
-            # Clear previous canvas
-            for widget in self.preview_canvas_frame.winfo_children():
-                widget.destroy()
-
-            fig, ax = plt.subplots(figsize=(12, 2.5))
-            time_axis = (np.arange(len(audio_view)) + view_start) / self.sample_rate
-            ax.plot(time_axis, audio_view, 'b-', linewidth=0.7, alpha=0.7, label='Audio')
-            
-            # Extraction window
-            if 0 <= start_sample < end_sample <= len(self.audio_data):
-                start_time = start_sample / self.sample_rate
-                end_time = end_sample / self.sample_rate
-                ax.axvspan(start_time, end_time, alpha=0.3, color='green', label='Extraction Window')
-            
-            # CSV time vs adjusted time
-            ax.axvline(csv_time, color='orange', linestyle='--', linewidth=2, label='CSV Time')
-            ax.axvline(adjusted_time, color='red', linestyle='-', linewidth=2.5, label='Adjusted Time')
-            
-            ax.set_xlabel('Time (s)', fontsize=9)
-            ax.set_ylabel('Amplitude', fontsize=9)
-            status = '✓ OK' if 0 <= start_sample < end_sample <= len(self.audio_data) else '✗ OUT OF BOUNDS'
-            ax.set_title(f"{first['key']} | Offset: {self.time_offset.get():+.3f}s | {status}", 
-                        fontsize=10, fontweight='bold')
-            ax.legend(loc='upper right', fontsize=8)
-            ax.grid(True, alpha=0.3)
-            fig.tight_layout()
-
-            canvas = FigureCanvasTkAgg(fig, master=self.preview_canvas_frame)
-            canvas.draw()
-            canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-            self.preview_canvas = canvas
-        except Exception as e:
-            print(f"Preview error: {e}")
-
-    def _cancel(self):
-        self._cancel_flag = True
-
-    def browse_session(self):
-        folder = filedialog.askdirectory(title="Select Session Folder (or Parent for Batch)")
+    def _browse(self):
+        folder = filedialog.askdirectory(
+            title='Select Session Folder (or batch parent)')
         if not folder:
             return
-        af = os.path.join(folder, 'audio.wav')
-        lf = os.path.join(folder, 'keystroke_log.csv')
-        if os.path.exists(af) and os.path.exists(lf):
+        if (os.path.exists(os.path.join(folder, 'audio.wav')) and
+                os.path.exists(os.path.join(folder, 'keystroke_log.csv'))):
             self._load_single(folder)
         else:
             sessions = self._find_sessions(folder)
             if not sessions:
-                messagebox.showerror("Error",
-                    "No valid sessions found.\nFolder must contain audio.wav + keystroke_log.csv,\n"
-                    "or subfolders that do.")
+                messagebox.showerror(
+                    'Error',
+                    'No valid sessions found.\n'
+                    'Needs audio.wav + keystroke_log.csv.')
                 return
-            msg = f"Found {len(sessions)} session(s):\n\n"
-            msg += "\n".join(f"  • {os.path.basename(s)}" for s in sessions[:10])
-            if len(sessions) > 10:
-                msg += f"\n  … and {len(sessions)-10} more"
-            msg += "\n\nProcess all?"
-            if messagebox.askyesno("Batch", msg):
+            msg = (f'Found {len(sessions)} session(s).\n\n'
+                   + '\n'.join(f'  • {os.path.basename(s)}'
+                               for s in sessions[:10])
+                   + (f'\n  … and {len(sessions)-10} more'
+                      if len(sessions) > 10 else '')
+                   + '\n\nProcess all in batch?')
+            if messagebox.askyesno('Batch', msg):
                 self._load_batch(sessions)
 
-    def _find_sessions(self, root, max_depth=3):
+    @staticmethod
+    def _find_sessions(root, max_depth=3):
         found = []
         def _walk(d, depth):
             if depth > max_depth:
                 return
             try:
-                if os.path.exists(os.path.join(d, 'audio.wav')) and \
-                   os.path.exists(os.path.join(d, 'keystroke_log.csv')):
-                    found.append(d)
-                    return
+                if (os.path.exists(os.path.join(d, 'audio.wav')) and
+                        os.path.exists(os.path.join(d, 'keystroke_log.csv'))):
+                    found.append(d); return
                 for item in sorted(os.listdir(d)):
                     p = os.path.join(d, item)
                     if os.path.isdir(p):
@@ -896,97 +828,373 @@ class DataSegmenterTab:
 
     def _load_single(self, folder):
         try:
-            self.current_session_path = folder
-            self.batch_sessions = None
-            self.audio_data, self.sample_rate = self.audio.load_audio(
-                os.path.join(folder, 'audio.wav'))
-            if self.audio_data is None:
-                raise RuntimeError("load_audio returned None")
-            with open(os.path.join(folder, 'keystroke_log.csv'), 'r') as f:
-                self.keystroke_log = []
-                for row in csv.DictReader(f):
-                    row['relative_time'] = float(row['relative_time'])
-                    self.keystroke_log.append(row)
-            dur = len(self.audio_data) / self.sample_rate
-            self.session_label.config(text=f"Loaded: {os.path.basename(folder)}", fg="green")
-            self.session_info_label.config(
-                text=f"Audio: {dur:.1f}s @ {self.sample_rate} Hz | Keystrokes: {len(self.keystroke_log)}")
-            self.process_btn.config(state=tk.NORMAL)
-            self._redraw_preview()
-            self.verify_btn.config(state=tk.DISABLED)
+            audio, sr = self.audio.load_audio(os.path.join(folder, 'audio.wav'))
+            if audio is None:
+                raise RuntimeError('load_audio returned None')
+            log = self._read_log(os.path.join(folder, 'keystroke_log.csv'))
+            self.session_cache[folder] = (audio, sr, log)
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to load: {e}")
-            self.current_session_path = None
+            messagebox.showerror('Error', f'Failed to load:\n{e}')
+            return
+
+        self.current_session_path = folder
+        self.batch_sessions = None
+        self.batch_sel_frame.pack_forget()
+
+        dur = len(audio) / sr
+        self.session_label.config(
+            text=f'Loaded: {os.path.basename(folder)}', fg='green')
+        self.session_info.config(
+            text=f'Audio: {dur:.1f} s @ {sr} Hz  |  {len(log)} keystrokes')
+        self.process_btn.config(state=tk.NORMAL)
+        self.show_viewer_btn.config(state=tk.DISABLED)
+
+        self._apply_preview(folder, audio, sr, log, offset=0.0)
+        self._kick_offset_computation(folder, audio, sr, log)
 
     def _load_batch(self, sessions):
         self.current_session_path = None
         self.batch_sessions = sessions
-        self.audio_data = None
-        self.keystroke_log = []
+        self.session_cache = {}
+
+        names = [os.path.basename(s) for s in sessions]
+        self.session_combo.config(values=names)
+        self.session_combo.current(0)
+        self.batch_sel_frame.pack(fill=tk.X, pady=(6, 0))
+
         total = 0
         for s in sessions:
             try:
-                total += len(self._read_log(os.path.join(s, 'keystroke_log.csv')))
+                total += len(self._read_log(
+                    os.path.join(s, 'keystroke_log.csv')))
             except Exception:
                 pass
-        self.session_label.config(text=f"Batch: {len(sessions)} sessions", fg="green")
-        self.session_info_label.config(text=f"≈ {total} keystrokes total")
+        self.session_label.config(
+            text=f'Batch: {len(sessions)} sessions', fg='green')
+        self.session_info.config(text=f'≈ {total} keystrokes total')
         self.process_btn.config(state=tk.NORMAL)
+        self.show_viewer_btn.config(state=tk.DISABLED)
+        self._load_preview_async(sessions[0])
 
-    @staticmethod
-    def _read_log(path):
-        log = []
-        with open(path, 'r') as f:
-            for row in csv.DictReader(f):
-                row['relative_time'] = float(row['relative_time'])
-                log.append(row)
-        return log
+    def _on_combo_select(self, _=None):
+        idx = self.session_combo.current()
+        if self.batch_sessions and 0 <= idx < len(self.batch_sessions):
+            self._load_preview_async(self.batch_sessions[idx])
 
-    def _snapshot_params(self) -> Dict:
-        return {
-            'output_name': self.output_name_var.get(),
-            'segment_duration': self.segment_duration.get(),
-            'pre_trigger': self.pre_trigger.get(),
-            'search_radius': self.search_radius.get(),
-            'peak_snr_db': self.peak_snr_db.get(),
-            'min_crest_factor': self.min_crest_factor.get(),
-            'enable_template': self.enable_template.get(),
-            'template_corr': self.template_corr_thresh.get(),
-            'enable_filtering': self.enable_filtering.get(),
-            'filter_low': self.filter_low.get(),
-            'filter_high': self.filter_high.get(),
-        }
+    def _load_preview_async(self, folder):
+        self._placeholder('Loading session…')
+        self.auto_offset_lbl.config(text='loading…', fg='#888')
 
-    def start_segmentation(self):
-        if self.batch_sessions is None and (self.audio_data is None or not self.keystroke_log):
-            messagebox.showwarning("Warning", "No session loaded")
+        def _run():
+            try:
+                if folder in self.session_cache:
+                    audio, sr, log = self.session_cache[folder]
+                else:
+                    audio, sr = self.audio.load_audio(
+                        os.path.join(folder, 'audio.wav'))
+                    if audio is None:
+                        raise RuntimeError('load_audio returned None')
+                    log = self._read_log(
+                        os.path.join(folder, 'keystroke_log.csv'))
+                    self.session_cache[folder] = (audio, sr, log)
+
+                self._safe_ui(lambda: self._apply_preview(
+                    folder, audio, sr, log, offset=0.0))
+                self._kick_offset_computation(folder, audio, sr, log)
+            except Exception as e:
+                self._safe_ui(
+                    lambda: self._placeholder(f'Load error: {e}'))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _apply_preview(self, folder, audio, sr, log, *, offset):
+        self.prev_audio  = audio
+        self.prev_log    = log
+        self.prev_sr     = sr
+        self.prev_path   = folder
+        self.prev_offset = offset
+        self.fine_tune.set(0.0)
+        self.auto_offset_lbl.config(
+            text=f'{offset:+.4f} s' if offset != 0.0 else 'computing…',
+            fg='#1565C0' if offset != 0.0 else '#888')
+        if self.right_mode == 'preview':
+            self._redraw_preview()
+
+    def _kick_offset_computation(self, folder, audio, sr, log):
+        self._offset_token += 1
+        token = self._offset_token
+        self.auto_offset_lbl.config(text='computing…', fg='#888')
+
+        def _run():
+            try:
+                off = auto_calculate_offset(audio, sr, log)
+            except Exception as e:
+                print(f'Offset error: {e}')
+                import traceback; traceback.print_exc()
+                off = 0.0
+
+            def _apply():
+                if self._offset_token != token:
+                    return
+                self.prev_offset = off
+                self.auto_offset_lbl.config(
+                    text=f'{off:+.4f} s', fg='#1565C0')
+                if self.right_mode == 'preview':
+                    self._redraw_preview()
+
+            self._safe_ui(_apply)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    # ── preview drawing ───────────────────────────────────────────────────────
+
+    def _total_offset(self) -> float:
+        return self.prev_offset + self.fine_tune.get()
+
+    def _redraw_preview(self):
+        if not HAS_MATPLOTLIB:
+            return
+        if self.prev_audio is None or not self.prev_log or self.prev_sr is None:
+            self._placeholder('Load a session to see the offset preview')
+            return
+        try:
+            sr   = self.prev_sr
+            mono = _to_mono(self.prev_audio)
+            n_a  = len(mono)
+            toff = self._total_offset()
+
+            first = self.prev_log[0]
+            csv_t = float(first['relative_time'])
+            adj_t = max(0.0, csv_t + toff)
+            pre   = self.pre_trigger.get()
+            dur   = self.segment_duration.get()
+            seg_s = adj_t - pre
+            seg_e = seg_s + dur
+
+            ctx = 1.5
+            v0 = max(0.0, adj_t - ctx)
+            v1 = min(n_a / sr, adj_t + ctx)
+            s0, s1 = int(v0 * sr), int(v1 * sr)
+            snippet = mono[s0:s1].astype(np.float32)
+            t_ax = np.linspace(v0, v1, len(snippet))
+
+            self.ax.clear()
+            self.ax.plot(t_ax, snippet, color='#1565C0', lw=0.7, alpha=0.75,
+                         label='Audio')
+
+            ew0 = max(v0, seg_s)
+            ew1 = min(v1, seg_e)
+            if ew1 > ew0:
+                self.ax.axvspan(ew0, ew1, alpha=0.22, color='#4CAF50',
+                                label='Extraction window')
+
+            self.ax.axvline(csv_t, color='#FF9800', ls='--', lw=1.8,
+                            label=f'CSV time ({csv_t:.3f} s)')
+            self.ax.axvline(adj_t, color='#E53935', ls='-', lw=2.2,
+                            label=f'Adjusted ({adj_t:.3f} s)')
+
+            # Show a few more keystrokes for context
+            for entry in self.prev_log[1:8]:
+                ct2 = float(entry['relative_time'])
+                at2 = max(0.0, ct2 + toff)
+                if v0 <= at2 <= v1:
+                    self.ax.axvline(at2, color='#E53935', ls=':', lw=0.8,
+                                    alpha=0.4)
+                if v0 <= ct2 <= v1:
+                    self.ax.axvline(ct2, color='#FF9800', ls=':', lw=0.8,
+                                    alpha=0.3)
+
+            ok = (0 <= int(seg_s * sr) and int(seg_e * sr) <= n_a)
+            self.ax.set_title(
+                f"Key: '{first['key']}' | "
+                f"auto {self.prev_offset:+.4f} s  "
+                f"fine {self.fine_tune.get():+.3f} s"
+                f" = total {toff:+.4f} s | "
+                f"{'✓ OK' if ok else '✗ OOB'}",
+                fontsize=9, fontweight='bold',
+                color='#1B5E20' if ok else '#B71C1C')
+            self.ax.set_xlabel('Time (s)', fontsize=9)
+            self.ax.set_ylabel('Amplitude', fontsize=9)
+            self.ax.legend(loc='upper right', fontsize=8)
+            self.ax.grid(True, alpha=0.2)
+            self.ax.set_xlim(v0, v1)
+            self.fig.tight_layout(pad=0.6)
+            self.mpl_canvas.draw_idle()
+        except Exception as e:
+            print(f'Preview redraw error: {e}')
+            import traceback; traceback.print_exc()
+
+    # ── viewer drawing ────────────────────────────────────────────────────────
+
+    def _redraw_viewer(self):
+        if not HAS_MATPLOTLIB:
+            return
+        if (self.viewer_segments is None or
+                self.viewer_audio is None or not self.viewer_sr):
+            self._placeholder(
+                'Run segmentation first, then switch to this view')
+            return
+
+        ok = [s for s in self.viewer_segments if s['status'] == 'ok']
+        if not ok:
+            self._placeholder('No accepted segments to display')
+            return
+
+        mono = _to_mono(self.viewer_audio).astype(np.float32)
+        t_ax = np.arange(len(mono), dtype=np.float32) / self.viewer_sr
+
+        self.ax.clear()
+        self.ax.plot(t_ax, mono, color='#1565C0', lw=0.4, alpha=0.5)
+
+        clrs = plt.cm.tab20(np.linspace(0, 1, 20))
+        for i, seg in enumerate(ok):
+            self.ax.axvspan(seg['start_sample'] / self.viewer_sr,
+                            seg['end_sample'] / self.viewer_sr,
+                            alpha=0.28, color=clrs[i % 20])
+
+        self.ax.set_xlabel('Time (s)', fontsize=9)
+        self.ax.set_ylabel('Amplitude', fontsize=9)
+        self.ax.set_title(
+            f'{len(ok)} segments — drag to pan, buttons to zoom',
+            fontsize=9, fontweight='bold')
+        self.ax.grid(True, alpha=0.2)
+        self.ax.set_xlim(0, len(mono) / self.viewer_sr)
+
+        self._viewer_ok_segs = ok
+        self.seg_slider.config(to=max(0, len(ok) - 1))
+        self.seg_var.set(0)
+        self.seg_label.config(text=f'1/{len(ok)}')
+        self.fig.tight_layout(pad=0.6)
+        self.mpl_canvas.draw_idle()
+
+    # ── viewer navigation ─────────────────────────────────────────────────────
+
+    def _v_fit(self):
+        if self.viewer_audio is not None and self.viewer_sr:
+            self.ax.set_xlim(
+                0, len(_to_mono(self.viewer_audio)) / self.viewer_sr)
+            self.mpl_canvas.draw_idle()
+
+    def _v_zin(self):
+        xl = self.ax.get_xlim()
+        c = (xl[0] + xl[1]) / 2; w = (xl[1] - xl[0]) / 3
+        self.ax.set_xlim(c - w, c + w)
+        self.mpl_canvas.draw_idle()
+
+    def _v_zout(self):
+        if self.viewer_audio is not None and self.viewer_sr:
+            xl = self.ax.get_xlim()
+            c = (xl[0] + xl[1]) / 2; w = (xl[1] - xl[0]) * 1.6
+            tmax = len(_to_mono(self.viewer_audio)) / self.viewer_sr
+            self.ax.set_xlim(max(0, c - w), min(tmax, c + w))
+            self.mpl_canvas.draw_idle()
+
+    def _v_pleft(self):
+        xl = self.ax.get_xlim()
+        sh = (xl[1] - xl[0]) * 0.25; w = xl[1] - xl[0]
+        self.ax.set_xlim(max(0, xl[0] - sh), max(w, xl[1] - sh))
+        self.mpl_canvas.draw_idle()
+
+    def _v_pright(self):
+        if self.viewer_audio is None or not self.viewer_sr:
+            return
+        xl = self.ax.get_xlim()
+        sh = (xl[1] - xl[0]) * 0.25; w = xl[1] - xl[0]
+        tmax = len(_to_mono(self.viewer_audio)) / self.viewer_sr
+        self.ax.set_xlim(min(tmax - w, xl[0] + sh), min(tmax, xl[1] + sh))
+        self.mpl_canvas.draw_idle()
+
+    def _v_goto_seg(self, _=None):
+        ok = getattr(self, '_viewer_ok_segs', [])
+        idx = self.seg_var.get()
+        if ok and 0 <= idx < len(ok) and self.viewer_sr:
+            seg = ok[idx]
+            st = seg['start_sample'] / self.viewer_sr
+            en = seg['end_sample'] / self.viewer_sr
+            mg = (en - st) * 0.8
+            self.ax.set_xlim(max(0, st - mg), en + mg)
+            self.mpl_canvas.draw_idle()
+        self.seg_label.config(
+            text=f'{idx + 1}/{len(ok)}' if ok else '0/0')
+
+    # ── mouse drag-pan ────────────────────────────────────────────────────────
+
+    def _on_press(self, e):
+        if self.right_mode == 'viewer' and e.inaxes == self.ax:
+            self._drag_x = e.xdata
+
+    def _on_release(self, _):
+        self._drag_x = None
+
+    def _on_motion(self, e):
+        if (self.right_mode == 'viewer' and self._drag_x is not None
+                and e.inaxes == self.ax and e.xdata is not None
+                and self.viewer_audio is not None and self.viewer_sr):
+            dx = e.xdata - self._drag_x
+            xl = self.ax.get_xlim()
+            tmax = len(_to_mono(self.viewer_audio)) / self.viewer_sr
+            w = xl[1] - xl[0]
+            new0 = max(0, xl[0] - dx)
+            new1 = new0 + w
+            if new1 > tmax:
+                new1 = tmax; new0 = tmax - w
+            self.ax.set_xlim(new0, new1)
+            self.mpl_canvas.draw_idle()
+
+    # ── placeholder ───────────────────────────────────────────────────────────
+
+    def _placeholder(self, msg):
+        if not HAS_MATPLOTLIB:
+            return
+        self.ax.clear()
+        self.ax.text(0.5, 0.5, msg, ha='center', va='center',
+                     fontsize=11, color='#9E9E9E',
+                     transform=self.ax.transAxes)
+        self.ax.set_axis_off()
+        self.fig.tight_layout(pad=0.6)
+        self.mpl_canvas.draw_idle()
+
+    # ── segmentation ──────────────────────────────────────────────────────────
+
+    def _start_segmentation(self):
+        if self.prev_audio is None:
+            messagebox.showwarning(
+                'Warning', 'No session loaded for segmentation')
             return
         self._cancel_flag = False
-        params = self._snapshot_params()
+        params = self._params()
         self.process_btn.config(state=tk.DISABLED)
-        self.progress_var.set(0)
+        self.prog_var.set(0)
         self.results_text.delete(1.0, tk.END)
-
         if self.batch_sessions:
-            threading.Thread(target=self._run_batch, args=(params,), daemon=True).start()
+            threading.Thread(target=self._run_batch, args=(params,),
+                             daemon=True).start()
         else:
-            threading.Thread(target=self._run_single, args=(params,), daemon=True).start()
+            threading.Thread(target=self._run_single, args=(params,),
+                             daemon=True).start()
 
     def _run_single(self, params):
         try:
-            output_base = os.path.join(os.path.dirname(self.current_session_path),
-                                        params['output_name'])
-            os.makedirs(output_base, exist_ok=True)
+            audio  = self.prev_audio
+            sr     = self.prev_sr
+            log    = self.prev_log
+            folder = self.prev_path
+
+            out = os.path.join(os.path.dirname(folder),
+                               params['output_name'])
+            os.makedirs(out, exist_ok=True)
 
             def _prog(i, n):
                 if self._cancel_flag:
-                    raise InterruptedError("Cancelled")
-                pct = i / n * 100
-                self._safe_ui(lambda p=pct: self.progress_var.set(p))
-                self._safe_ui(lambda a=i, b=n: self.progress_label.config(text=f"{a}/{b}"))
+                    raise InterruptedError
+                self._safe_ui(lambda p=i / n * 100: self.prog_var.set(p))
+                self._safe_ui(lambda a=i, b=n:
+                              self.prog_label.config(
+                                  text=f'Processing {a}/{b}…'))
 
-            segments, stats = extract_keystrokes(
-                self.audio_data, self.sample_rate, self.keystroke_log,
+            segs, stats = extract_keystrokes(
+                audio, sr, log,
+                offset=self._total_offset(),
                 segment_duration=params['segment_duration'],
                 pre_trigger=params['pre_trigger'],
                 search_radius_sec=params['search_radius'],
@@ -1000,80 +1208,80 @@ class DataSegmenterTab:
                 progress_callback=_prog,
             )
 
-            key_counts, metadata = self._save_segments(segments, output_base)
-            self._save_metadata(metadata, output_base)
-            self._save_rejection_report(segments, output_base)
+            kc, meta = self._save_segments(segs, out)
+            self._save_metadata(meta, out)
+            self._save_rejections(segs, out)
 
-            self.last_segments = segments
+            vname = os.path.basename(folder)
+            self._safe_ui(lambda a=audio, s=sr, sg=segs, n=vname:
+                          self._register_viewer_session(n, a, s, sg))
 
-            results = self._format_results(stats, key_counts, output_base, self.sample_rate)
-            self._safe_ui(lambda: self.results_text.insert(1.0, results))
-            self._safe_ui(lambda: self.progress_var.set(100))
-            self._safe_ui(lambda: self.process_btn.config(state=tk.NORMAL))
-            self._safe_ui(lambda: self.verify_btn.config(state=tk.NORMAL))
-            self._safe_ui(lambda: messagebox.showinfo("Done", f"Saved {stats['saved']} segments"))
+            res = self._fmt_results(stats, kc, out)
+            self._safe_ui(lambda: self.results_text.insert(1.0, res))
+            self._safe_ui(lambda: self.prog_var.set(100))
+            self._safe_ui(lambda: self.prog_label.config(text='Done ✓'))
+            self._safe_ui(
+                lambda: self.process_btn.config(state=tk.NORMAL))
+            self._safe_ui(
+                lambda: self.show_viewer_btn.config(state=tk.NORMAL))
+            self._safe_ui(lambda: messagebox.showinfo(
+                'Done',
+                f"Saved {stats['saved']} / {stats['total_csv']}"))
 
         except InterruptedError:
-            self._safe_ui(lambda: self.progress_label.config(text="Cancelled"))
-            self._safe_ui(lambda: self.process_btn.config(state=tk.NORMAL))
+            self._safe_ui(
+                lambda: self.prog_label.config(text='Cancelled'))
+            self._safe_ui(
+                lambda: self.process_btn.config(state=tk.NORMAL))
         except Exception as e:
             import traceback; traceback.print_exc()
-            self._safe_ui(lambda: self.progress_label.config(text=f"Error: {e}"))
-            self._safe_ui(lambda: self.process_btn.config(state=tk.NORMAL))
-            self._safe_ui(lambda: messagebox.showerror("Error", str(e)))
+            self._safe_ui(
+                lambda: self.prog_label.config(text=f'Error: {e}'))
+            self._safe_ui(
+                lambda: self.process_btn.config(state=tk.NORMAL))
+            self._safe_ui(
+                lambda: messagebox.showerror('Error', str(e)))
 
     def _run_batch(self, params):
         try:
             first = self.batch_sessions[0]
-            current = first
-            recordings_root = None
-            for _ in range(10):
-                parent = os.path.dirname(current)
-                if os.path.basename(current) in ('recordings', 'backups'):
-                    recordings_root = current
-                    break
-                if parent == current:
-                    break
-                current = parent
+            out = os.path.join(os.path.dirname(first),
+                               params['output_name'])
+            os.makedirs(out, exist_ok=True)
+            n = len(self.batch_sessions)
+            ov = dict(total_sessions=n, processed=0, failed=0,
+                      total_csv=0, total_saved=0,
+                      key_counts={}, details=[])
 
-            if recordings_root:
-                rel = os.path.relpath(first, recordings_root)
-                parts = rel.split(os.sep)
-                device = "_".join(parts[:-1]) if len(parts) >= 2 else ""
-                name = f"{device}_{params['output_name']}" if device else params['output_name']
-                output_base = os.path.join(recordings_root, 'segmented', name)
-            else:
-                output_base = os.path.join(os.path.dirname(first), params['output_name'])
-
-            os.makedirs(output_base, exist_ok=True)
-            n_sessions = len(self.batch_sessions)
-
-            overall = {
-                'total_sessions': n_sessions, 'processed': 0, 'failed': 0,
-                'total_csv': 0, 'total_saved': 0, 'key_counts': {},
-                'details': [],
-            }
-
-            for si, sfolder in enumerate(self.batch_sessions):
+            for si, folder in enumerate(self.batch_sessions):
                 if self._cancel_flag:
                     break
-
-                sname = os.path.basename(sfolder)
-                pct = si / n_sessions * 100
-                self._safe_ui(lambda p=pct: self.progress_var.set(p))
-                self._safe_ui(lambda a=si+1, b=n_sessions, n=sname:
-                              self.progress_label.config(text=f"Session {a}/{b}: {n}"))
-
+                nm = os.path.basename(folder)
+                self._safe_ui(
+                    lambda p=si / n * 100: self.prog_var.set(p))
+                self._safe_ui(
+                    lambda a=si + 1, b=n, nm=nm:
+                    self.prog_label.config(
+                        text=f'Session {a}/{b}: {nm}'))
                 try:
-                    audio_data, sr = self.audio.load_audio(os.path.join(sfolder, 'audio.wav'))
-                    if audio_data is None:
-                        raise RuntimeError("load_audio returned None")
-                    log = self._read_log(os.path.join(sfolder, 'keystroke_log.csv'))
+                    if folder in self.session_cache:
+                        audio, sr, log = self.session_cache[folder]
+                    else:
+                        audio, sr = self.audio.load_audio(
+                            os.path.join(folder, 'audio.wav'))
+                        if audio is None:
+                            raise RuntimeError('load_audio returned None')
+                        log = self._read_log(
+                            os.path.join(folder, 'keystroke_log.csv'))
+                        self.session_cache[folder] = (audio, sr, log)
 
-                    print(f"\n[{si+1}/{n_sessions}] {sname}: {len(log)} keystrokes, {len(audio_data)/sr:.1f}s")
+                    print(f'\n[{si + 1}/{n}] {nm}: '
+                          f'{len(log)} keys, {len(audio) / sr:.1f} s')
+                    off = auto_calculate_offset(audio, sr, log)
 
-                    segments, stats = extract_keystrokes(
-                        audio_data, sr, log,
+                    segs, stats = extract_keystrokes(
+                        audio, sr, log,
+                        offset=off,
                         segment_duration=params['segment_duration'],
                         pre_trigger=params['pre_trigger'],
                         search_radius_sec=params['search_radius'],
@@ -1085,146 +1293,198 @@ class DataSegmenterTab:
                         bandpass_low=params['filter_low'],
                         bandpass_high=params['filter_high'],
                     )
-
-                    key_counts, _ = self._save_segments(segments, output_base)
-
-                    overall['processed'] += 1
-                    overall['total_csv'] += stats['total_csv']
-                    overall['total_saved'] += stats['saved']
-                    for k, c in key_counts.items():
-                        overall['key_counts'][k] = overall['key_counts'].get(k, 0) + c
-                    overall['details'].append({'name': sname, 'stats': stats, 'ok': True})
+                    kc, _ = self._save_segments(segs, out)
+                    ov['processed'] += 1
+                    ov['total_csv'] += stats['total_csv']
+                    ov['total_saved'] += stats['saved']
+                    for k, c in kc.items():
+                        ov['key_counts'][k] = \
+                            ov['key_counts'].get(k, 0) + c
+                    ov['details'].append(
+                        {'name': nm, 'stats': stats, 'ok': True})
+                    self._safe_ui(
+                        lambda a=audio, s=sr, sg=segs, n=nm:
+                        self._register_viewer_session(n, a, s, sg))
 
                 except Exception as e:
                     import traceback; traceback.print_exc()
-                    overall['failed'] += 1
-                    overall['details'].append({'name': sname, 'ok': False, 'error': str(e)})
+                    ov['failed'] += 1
+                    ov['details'].append(
+                        {'name': nm, 'ok': False, 'error': str(e)})
 
-            self._write_batch_summary(overall, output_base)
-            results = self._format_batch_results(overall, output_base)
-            self._safe_ui(lambda: self.results_text.insert(1.0, results))
-            self._safe_ui(lambda: self.progress_var.set(100))
-            self._safe_ui(lambda: self.process_btn.config(state=tk.NORMAL))
-            self._safe_ui(lambda: messagebox.showinfo("Batch Done",
-                f"{overall['processed']} sessions, {overall['total_saved']} segments saved"))
-
+            self._write_batch_summary(ov, out)
+            res = self._fmt_batch(ov, out)
+            self._safe_ui(lambda: self.results_text.insert(1.0, res))
+            self._safe_ui(lambda: self.prog_var.set(100))
+            self._safe_ui(
+                lambda: self.prog_label.config(text='Batch done ✓'))
+            self._safe_ui(
+                lambda: self.process_btn.config(state=tk.NORMAL))
+            self._safe_ui(
+                lambda: self.show_viewer_btn.config(state=tk.NORMAL))
+            self._safe_ui(lambda: messagebox.showinfo(
+                'Batch Done',
+                f"{ov['processed']}/{n} sessions\n"
+                f"{ov['total_saved']}/{ov['total_csv']} saved"))
         except Exception as e:
             import traceback; traceback.print_exc()
-            self._safe_ui(lambda: self.progress_label.config(text=f"Error: {e}"))
-            self._safe_ui(lambda: self.process_btn.config(state=tk.NORMAL))
+            self._safe_ui(
+                lambda: self.prog_label.config(text=f'Error: {e}'))
+            self._safe_ui(
+                lambda: self.process_btn.config(state=tk.NORMAL))
 
-    def view_verification(self):
-        """Show interactive verification viewer."""
-        if not HAS_MATPLOTLIB or self.last_segments is None or self.audio_data is None:
-            messagebox.showerror("Error", "Matplotlib required or no extraction data available")
-            return
-        InteractiveVerificationViewer(self.parent, self.audio_data, self.sample_rate, self.last_segments)
+    # ── helpers ───────────────────────────────────────────────────────────────
 
-    def _save_segments(self, segments, output_base):
-        key_counts = {}
-        metadata = []
+    def _params(self) -> Dict:
+        return dict(
+            output_name=self.output_name_var.get(),
+            segment_duration=self.segment_duration.get(),
+            pre_trigger=self.pre_trigger.get(),
+            search_radius=self.search_radius.get(),
+            peak_snr_db=self.peak_snr_db.get(),
+            min_crest_factor=self.min_crest_factor.get(),
+            enable_template=self.enable_template.get(),
+            template_corr=self.template_corr_thresh.get(),
+            enable_filtering=self.enable_filtering.get(),
+            filter_low=self.filter_low.get(),
+            filter_high=self.filter_high.get(),
+        )
+
+    def _slider(self, parent, label, var, lo, hi, res):
+        row = tk.Frame(parent); row.pack(fill=tk.X, pady=2)
+        tk.Label(row, text=label, width=26,
+                 anchor=tk.W).pack(side=tk.LEFT, padx=4)
+        tk.Scale(row, from_=lo, to=hi, resolution=res,
+                 orient=tk.HORIZONTAL, variable=var,
+                 length=200).pack(side=tk.LEFT, padx=4)
+
+    def _toggle_filter(self):
+        st = tk.NORMAL if self.enable_filtering.get() else tk.DISABLED
+        self.flt_lo_entry.config(state=st)
+        self.flt_hi_entry.config(state=st)
+
+    def _set_filter(self, lo, hi):
+        self.filter_low.set(lo); self.filter_high.set(hi)
+        self.enable_filtering.set(True); self._toggle_filter()
+
+    def _safe_ui(self, fn):
+        try:
+            self.parent.after_idle(fn)
+        except Exception:
+            pass
+
+    # ── save: one file per keystroke under output/<key>/N.wav ─────────────────
+
+    def _save_segments(self, segments, out):
+        kc: Dict[str, int] = {}
+        meta = []
+
         for seg in segments:
             if seg['status'] != 'ok':
                 continue
             key = seg['key']
-            key_folder = os.path.join(output_base, key)
-            os.makedirs(key_folder, exist_ok=True)
+            kf  = os.path.join(out, key)
+            os.makedirs(kf, exist_ok=True)
 
-            existing = [f for f in os.listdir(key_folder) if f.endswith('.wav')]
-            fnum = len(existing)
-            fname = f"{fnum}.wav"
-            fpath = os.path.join(key_folder, fname)
+            n  = kc.get(key, 0)
+            fp = os.path.join(kf, f'{n}.wav')
 
-            if self.audio.save_audio(fpath, seg['audio']):
-                key_counts[key] = key_counts.get(key, 0) + 1
-                metadata.append({
-                    'key': key, 'filename': fname,
-                    'timestamp': seg['timestamp'],
-                    'csv_time': f"{seg['csv_time']:.4f}",
-                    'peak_sample': seg['peak_sample'],
-                    'start_sample': seg['start_sample'],
-                    'snr_db': f"{seg['snr_db']:.1f}",
-                    'peak_amp': f"{seg['peak_amp']:.6f}",
-                    'crest_factor': f"{seg['crest_factor']:.2f}",
-                    'template_corr': f"{seg['template_corr']:.3f}",
-                })
-        return key_counts, metadata
-
-    @staticmethod
-    def _save_metadata(metadata, output_base):
-        if not metadata:
-            return
-        path = os.path.join(output_base, 'metadata.csv')
-        fields = list(metadata[0].keys())
-        with open(path, 'w', newline='') as f:
-            w = csv.DictWriter(f, fieldnames=fields)
-            w.writeheader()
-            w.writerows(metadata)
+            if self.audio.save_audio(fp, seg['audio']):
+                kc[key] = n + 1
+                meta.append(dict(
+                    key=key,
+                    filename=f'{n}.wav',
+                    timestamp=seg['timestamp'],
+                    csv_time=f"{seg['csv_time']:.4f}",
+                    peak_sample=seg['peak_sample'],
+                    start_sample=seg['start_sample'],
+                    snr_db=f"{seg['snr_db']:.1f}",
+                    peak_amp=f"{seg['peak_amp']:.6f}",
+                    crest_factor=f"{seg['crest_factor']:.2f}",
+                    template_corr=f"{seg['template_corr']:.3f}",
+                ))
+        return kc, meta
 
     @staticmethod
-    def _save_rejection_report(segments, output_base):
-        rejected = [s for s in segments if s['status'] != 'ok']
-        if not rejected:
+    def _save_metadata(meta, out):
+        if not meta:
             return
-        path = os.path.join(output_base, 'rejections.csv')
-        fields = ['key', 'csv_time', 'status', 'peak_sample', 'snr_db', 'peak_amp', 'crest_factor', 'template_corr']
-        with open(path, 'w', newline='') as f:
-            w = csv.DictWriter(f, fieldnames=fields, extrasaction='ignore')
+        with open(os.path.join(out, 'metadata.csv'), 'w',
+                  newline='') as f:
+            w = csv.DictWriter(f, fieldnames=list(meta[0].keys()))
+            w.writeheader(); w.writerows(meta)
+
+    @staticmethod
+    def _save_rejections(segs, out):
+        rej = [s for s in segs if s['status'] != 'ok']
+        if not rej:
+            return
+        fields = ['key', 'csv_time', 'status', 'peak_sample',
+                  'snr_db', 'peak_amp', 'crest_factor', 'template_corr']
+        with open(os.path.join(out, 'rejections.csv'), 'w',
+                  newline='') as f:
+            w = csv.DictWriter(f, fieldnames=fields,
+                               extrasaction='ignore')
             w.writeheader()
-            for s in rejected:
+            for s in rej:
                 row = {k: s.get(k, '') for k in fields}
-                for fk in ['csv_time', 'snr_db', 'peak_amp', 'crest_factor', 'template_corr']:
+                for fk in ('csv_time', 'snr_db', 'peak_amp',
+                           'crest_factor', 'template_corr'):
                     if isinstance(row[fk], float):
-                        row[fk] = f"{row[fk]:.4f}"
+                        row[fk] = f'{row[fk]:.4f}'
                 w.writerow(row)
 
     @staticmethod
-    def _format_results(stats, key_counts, output_base, sr):
-        saved = stats['saved']
-        total = stats['total_csv']
-        txt = f"""SEGMENTATION COMPLETE
-{'='*55}
-CSV keystrokes:      {total}
-Saved:               {saved}  ({100*saved/max(1,total):.1f}%)
-
-Rejection breakdown:
-  Silent / boundary: {stats['rejected_silent']}
-  Low peak amplitude:{stats['rejected_low_peak']}
-  Low local SNR:     {stats['rejected_low_snr']}
-  Low crest factor:  {stats['rejected_low_transient']}
-  Template mismatch: {stats['rejected_template']}
-  Overlap:           {stats['rejected_overlap']}
-
-Key distribution:
-"""
-        for k in sorted(key_counts):
-            txt += f"  {k:12s}: {key_counts[k]:4d}\n"
-        txt += f"\nOutput: {output_base}\n"
-        return txt
+    def _read_log(path) -> List[Dict]:
+        log = []
+        with open(path, 'r') as f:
+            for row in csv.DictReader(f):
+                row['relative_time'] = float(row['relative_time'])
+                log.append(row)
+        return log
 
     @staticmethod
-    def _format_batch_results(overall, output_base):
-        txt = f"""BATCH SEGMENTATION COMPLETE
-{'='*55}
-Sessions:  {overall['processed']}/{overall['total_sessions']}  (failed: {overall['failed']})
-Saved:     {overall['total_saved']}/{overall['total_csv']}  ({100*overall['total_saved']/max(1,overall['total_csv']):.1f}%)
-
-Key distribution:
-"""
-        for k in sorted(overall['key_counts']):
-            txt += f"  {k:12s}: {overall['key_counts'][k]:4d}\n"
-        txt += f"\nOutput: {output_base}\n"
-        return txt
+    def _fmt_results(stats, kc, out) -> str:
+        s = stats; tot = s['total_csv']
+        saved = s['saved']
+        t = (f"SEGMENTATION COMPLETE\n{'=' * 50}\n"
+             f"CSV entries : {tot}\n"
+             f"Saved       : {saved}  ({100 * saved / max(1, tot):.1f}%)\n"
+             f"Rejected    : {tot - saved}\n\n"
+             f"Rejection breakdown:\n"
+             f"  Boundary   : {s['rejected_silent']}\n"
+             f"  Low peak   : {s['rejected_low_peak']}\n"
+             f"  Low SNR    : {s['rejected_low_snr']}\n"
+             f"  Low crest  : {s['rejected_low_transient']}\n"
+             f"  Template   : {s['rejected_template']}\n"
+             f"  Overlap    : {s['rejected_overlap']}\n\n"
+             f"Per-key counts:\n")
+        for k in sorted(kc):
+            t += f"  {k:14s}: {kc[k]:4d}\n"
+        t += f"\nOutput: {out}/<key>/N.wav\n"
+        return t
 
     @staticmethod
-    def _write_batch_summary(overall, output_base):
-        path = os.path.join(output_base, 'batch_summary.txt')
-        with open(path, 'w') as f:
-            f.write(f"Batch: {overall['processed']}/{overall['total_sessions']} sessions\n")
-            f.write(f"Saved: {overall['total_saved']}/{overall['total_csv']}\n\n")
-            for d in overall['details']:
+    def _fmt_batch(ov, out) -> str:
+        t = (f"BATCH COMPLETE\n{'=' * 50}\n"
+             f"Sessions : {ov['processed']}/{ov['total_sessions']}"
+             f"  (failed: {ov['failed']})\n"
+             f"Saved    : {ov['total_saved']}/{ov['total_csv']}"
+             f"  ({100 * ov['total_saved'] / max(1, ov['total_csv']):.1f}%)"
+             f"\n\nKeys:\n")
+        for k in sorted(ov['key_counts']):
+            t += f"  {k:14s}: {ov['key_counts'][k]:4d}\n"
+        t += f"\nOutput: {out}\n"
+        return t
+
+    @staticmethod
+    def _write_batch_summary(ov, out):
+        with open(os.path.join(out, 'batch_summary.txt'), 'w') as f:
+            f.write(f"Sessions: {ov['processed']}/{ov['total_sessions']}\n")
+            f.write(f"Saved: {ov['total_saved']}/{ov['total_csv']}\n\n")
+            for d in ov['details']:
                 if d['ok']:
-                    s = d['stats']
-                    f.write(f"{d['name']}: {s['saved']}/{s['total_csv']} saved\n")
+                    st = d['stats']
+                    f.write(f"{d['name']}: {st['saved']}/{st['total_csv']}\n")
                 else:
                     f.write(f"{d['name']}: FAILED — {d['error']}\n")
