@@ -1252,6 +1252,9 @@ class DataSegmenterTab:
             ov = dict(total_sessions=n, processed=0, failed=0,
                       total_csv=0, total_saved=0,
                       key_counts={}, details=[])
+            cumulative_counts: Dict[str, int] = {}  # shared across sessions
+            all_meta = []   # accumulated metadata
+            all_segs = []   # accumulated segments for rejections
 
             for si, folder in enumerate(self.batch_sessions):
                 if self._cancel_flag:
@@ -1293,7 +1296,9 @@ class DataSegmenterTab:
                         bandpass_low=params['filter_low'],
                         bandpass_high=params['filter_high'],
                     )
-                    kc, _ = self._save_segments(segs, out)
+                    kc, meta = self._save_segments(segs, out, cumulative_counts)
+                    all_meta.extend(meta)
+                    all_segs.extend(segs)
                     ov['processed'] += 1
                     ov['total_csv'] += stats['total_csv']
                     ov['total_saved'] += stats['saved']
@@ -1313,6 +1318,8 @@ class DataSegmenterTab:
                         {'name': nm, 'ok': False, 'error': str(e)})
 
             self._write_batch_summary(ov, out)
+            self._save_metadata(all_meta, out)
+            self._save_rejections(all_segs, out)
             res = self._fmt_batch(ov, out)
             self._safe_ui(lambda: self.results_text.insert(1.0, res))
             self._safe_ui(lambda: self.prog_var.set(100))
@@ -1375,8 +1382,19 @@ class DataSegmenterTab:
 
     # ── save: one file per keystroke under output/<key>/N.wav ─────────────────
 
-    def _save_segments(self, segments, out):
-        kc: Dict[str, int] = {}
+    def _save_segments(self, segments, out, cumulative_counts=None):
+        """
+        Save segments to out/<key>/N.wav.
+
+        cumulative_counts: optional Dict[str, int] that persists across
+        batch calls so file numbering continues (session 2 starts where
+        session 1 left off instead of overwriting from 0).
+        If None (single mode), a fresh dict is created.
+        Returns (session_kc, meta) where session_kc counts THIS call only.
+        """
+        if cumulative_counts is None:
+            cumulative_counts = {}
+        session_kc: Dict[str, int] = {}   # counts for THIS call only
         meta = []
 
         for seg in segments:
@@ -1386,11 +1404,12 @@ class DataSegmenterTab:
             kf  = os.path.join(out, key)
             os.makedirs(kf, exist_ok=True)
 
-            n  = kc.get(key, 0)
+            n  = cumulative_counts.get(key, 0)
             fp = os.path.join(kf, f'{n}.wav')
 
             if self.audio.save_audio(fp, seg['audio']):
-                kc[key] = n + 1
+                cumulative_counts[key] = n + 1
+                session_kc[key] = session_kc.get(key, 0) + 1
                 meta.append(dict(
                     key=key,
                     filename=f'{n}.wav',
@@ -1403,7 +1422,7 @@ class DataSegmenterTab:
                     crest_factor=f"{seg['crest_factor']:.2f}",
                     template_corr=f"{seg['template_corr']:.3f}",
                 ))
-        return kc, meta
+        return session_kc, meta
 
     @staticmethod
     def _save_metadata(meta, out):
