@@ -329,6 +329,7 @@ class MelConfig:
         f_min       – lowest frequency in Hz
         f_max       – highest frequency in Hz
         power       – 2.0 = power spectrogram, 1.0 = magnitude spectrogram
+                      log scale: power=1.0 → log2, power=2.0 → dB (10*log10)
         sample_rate – audio sample rate (must match training data)
     """
     n_mels      : int   = 128
@@ -346,14 +347,34 @@ class MelConfig:
                 f"f=[{int(self.f_min)},{int(self.f_max)}] p={self.power}")
 
 
+# Pre-built config matching phone.ipynb training pipeline exactly
+PHONE_MEL_CONFIG = MelConfig(
+    n_mels=64,
+    hop_length=256,
+    n_fft=2048,
+    win_length=1024,
+    f_min=298.97,
+    f_max=19569.78,
+    power=1.0,
+    sample_rate=44100
+)
+
+
 def build_mel_transform(cfg: MelConfig):
     """
-    Return a Compose pipeline: waveform Tensor → (1, n_mels, T) Tensor in dB scale.
+    Return a Compose pipeline: waveform Tensor → (1, n_mels, T) Tensor.
+
+    Log scale is determined by cfg.power:
+        power=1.0 → amplitude spectrogram, log2  scale  (phone.ipynb pipeline)
+        power=2.0 → power   spectrogram,   dB    scale  (default)
 
     Example::
         cfg = MelConfig(n_mels=256, hop_length=128)
         tfm = build_mel_transform(cfg)
         spec = tfm(waveform)   # shape: (1, 256, T)
+
+        # Phone pipeline:
+        tfm = build_mel_transform(PHONE_MEL_CONFIG)
     """
     to_mel = torchaudio.transforms.MelSpectrogram(
         sample_rate=cfg.sample_rate,
@@ -365,5 +386,8 @@ def build_mel_transform(cfg: MelConfig):
         f_max=cfg.f_max,
         power=cfg.power,
     )
-    to_db_numpy = lambda s: (10 * s.clamp(min=1e-10).log10())[0, :, :].numpy()
-    return Compose([to_mel, to_db_numpy, ToTensor()])
+    if cfg.power == 1.0:
+        to_log_numpy = lambda s: s.clamp(min=1e-9).log2()[0, :, :].numpy()
+    else:
+        to_log_numpy = lambda s: (10 * s.clamp(min=1e-10).log10())[0, :, :].numpy()
+    return Compose([to_mel, to_log_numpy, ToTensor()])
