@@ -29,6 +29,8 @@ from torchvision.transforms import Compose, ToTensor
 
 # (64-1) * hop_length=256 → exactly 64 time frames matching CNN.ipynb training
 TARGET_SAMPLES = 16128
+MODEL_SAMPLE_RATE = 44100
+MODEL_TARGET_DURATION = TARGET_SAMPLES / MODEL_SAMPLE_RATE
 
 
 class Stem(nn.Sequential):
@@ -293,10 +295,11 @@ class AudioRecorder:
         self.audio_buffer = deque(maxlen=int(sample_rate * 5))  # 5 second rolling buffer
         self.callback_func = None
         self.threshold = 0.06
+        self.channels = 1
 
         # segment_duration derived from TARGET_SAMPLES — matches CNN.ipynb exactly
         self.segment_duration = TARGET_SAMPLES / sample_rate  # 0.3657s → 64 frames
-        self.detection_buffer_size = int(sample_rate * 2.0)
+        self.detection_buffer_size = int(sample_rate * 1.0)
         self.last_detection_time = 0
         self.min_keystroke_interval = 0.12
         self.processed_sample_index = 0
@@ -310,9 +313,20 @@ class AudioRecorder:
                 devices.append({
                     'id': i,
                     'name': device['name'],
-                    'channels': device['max_input_channels']
+                    'channels': device['max_input_channels'],
+                    'default_samplerate': int(device.get('default_samplerate', self.sample_rate))
                 })
         return devices
+
+    def set_device_config(self, device_id=None, sample_rate=None, channels=1):
+        if device_id is not None:
+            self.device_id = device_id
+        if sample_rate is not None and sample_rate != self.sample_rate:
+            self.sample_rate = int(sample_rate)
+            self.audio_buffer = deque(maxlen=int(self.sample_rate * 5))
+            self.detection_buffer_size = int(self.sample_rate * 1.0)
+            self.segment_duration = TARGET_SAMPLES / MODEL_SAMPLE_RATE
+        self.channels = max(1, int(channels))
 
     def set_audio_callback(self, callback):
         self.callback_func = callback
@@ -320,7 +334,7 @@ class AudioRecorder:
     def audio_callback(self, indata, frames, time_info, status):
         if status:
             print(f"Audio callback status: {status}")
-        audio_data = indata[:, 0].copy()
+        audio_data = indata[:, 0].astype(np.float32, copy=True)
         self.audio_buffer.extend(audio_data)
         if self.callback_func:
             self.callback_func(audio_data)
@@ -397,22 +411,22 @@ class AudioRecorder:
 
         return peaks_with_quality
 
-    def extract_segment_centered(self, audio: np.ndarray, peak_sample: int) -> np.ndarray:
-        """Extract TARGET_SAMPLES centered around peak. No padding."""
-        start = peak_sample - TARGET_SAMPLES // 2
-        end = start + TARGET_SAMPLES
+    def extract_segment_centered(self, audio: np.ndarray, peak_sample: int, target_samples: int = TARGET_SAMPLES) -> np.ndarray:
+        """Extract target_samples centered around peak. No padding."""
+        start = peak_sample - target_samples // 2
+        end = start + target_samples
 
         start = max(0, start)
         end = min(len(audio), end)
 
         return audio[start:end]
 
-    def validate_segment_quality(self, segment: np.ndarray) -> Tuple[bool, float]:
+    def validate_segment_quality(self, segment: np.ndarray, target_samples: int = TARGET_SAMPLES) -> Tuple[bool, float]:
         """Validate segment quality. Segment must be exactly TARGET_SAMPLES."""
-        if len(segment) < TARGET_SAMPLES:
+        if len(segment) < target_samples:
             return False, 0.0
 
-        segment = segment[:TARGET_SAMPLES]
+        segment = segment[:target_samples]
 
         rms = np.sqrt(np.mean(segment**2))
         if rms < 1e-4:
@@ -444,7 +458,8 @@ class AudioRecorder:
 
     def detect_keystrokes(self):
         """Advanced keystroke detection using onset detection and quality validation."""
-        if len(self.audio_buffer) < self.detection_buffer_size:
+        segment_samples = int(round(MODEL_TARGET_DURATION * self.sample_rate))
+        if len(self.audio_buffer) < max(self.detection_buffer_size, segment_samples):
             return []
 
         current_time = time.time()
@@ -475,21 +490,22 @@ class AudioRecorder:
             absolute_peak = new_audio_start + peak_sample
 
             # Skip if segment would go out of buffer bounds
-            if absolute_peak < TARGET_SAMPLES // 2:
+            if absolute_peak < segment_samples // 2:
                 continue
-            if absolute_peak + TARGET_SAMPLES // 2 > buffer_length:
+            if absolute_peak + segment_samples // 2 > buffer_length:
                 continue
 
-            segment = self.extract_segment_centered(audio, absolute_peak)
+            segment = self.extract_segment_centered(audio, absolute_peak, target_samples=segment_samples)
 
-            is_valid, quality_score = self.validate_segment_quality(segment)
+            if len(segment) > segment_samples:
+                segment = segment[:segment_samples]
+
+            is_valid, quality_score = self.validate_segment_quality(segment, target_samples=segment_samples)
 
             if is_valid and quality_score > 0.3:
                 time_since_last = current_time - self.last_detection_time
                 if time_since_last < self.min_keystroke_interval and len(valid_keystrokes) > 0:
                     continue
-
-                segment = segment[:TARGET_SAMPLES]
 
                 valid_keystrokes.append({
                     'audio': segment,
@@ -555,11 +571,12 @@ class KeystrokeDetectionUI:
         self.save_mel_specs = False
         self.debug_dir = Path("model/debug_output")
         self.debug_dir.mkdir(parents=True, exist_ok=True)
+        self.available_devices = []
 
         self._create_widgets()
         self._log("Application started")
         self._log(f"Device: {self.device.upper()}")
-        self._log(f"Target samples: {TARGET_SAMPLES} ({TARGET_SAMPLES/44100:.4f}s) → 64 time frames")
+        self._log(f"Target samples: {TARGET_SAMPLES} ({TARGET_SAMPLES/MODEL_SAMPLE_RATE:.4f}s) → 64 time frames")
         self._log(f"Mel config: PHONE_MEL_CONFIG (n_mels=64, hop=256, power=1.0, log2)")
 
         self._auto_load_model()
@@ -775,12 +792,27 @@ class KeystrokeDetectionUI:
         self._log("Refreshing audio devices...")
         try:
             devices = self.recorder.get_available_devices()
+            self.available_devices = devices
             device_names = [f"{d['id']}: {d['name']}" for d in devices]
             self.mic_combo['values'] = device_names
             if device_names:
-                self.mic_combo.current(0)
-                self.recorder.device_id = devices[0]['id']
-                self._log(f"Found {len(device_names)} audio device(s)")
+                preferred_index = 0
+                for idx, device in enumerate(devices):
+                    device_name = device['name'].lower()
+                    if 'dji' in device_name or 'mic' in device_name:
+                        preferred_index = idx
+                        break
+
+                self.mic_combo.current(preferred_index)
+                selected = devices[preferred_index]
+                self.recorder.set_device_config(
+                    device_id=selected['id'],
+                    sample_rate=selected.get('default_samplerate', 44100),
+                    channels=1,
+                )
+                self._log(
+                    f"Found {len(device_names)} audio device(s); using {selected['name']} at {selected.get('default_samplerate', 44100)} Hz"
+                )
             else:
                 self._log("No audio devices found!", "WARNING")
         except Exception as e:
@@ -788,13 +820,46 @@ class KeystrokeDetectionUI:
 
     def _on_mic_selected(self, event):
         selection = self.mic_combo.current()
-        if selection >= 0:
-            devices = self.recorder.get_available_devices()
-            self.recorder.device_id = devices[selection]['id']
-            self._log(f"Microphone selected: {devices[selection]['name']}")
+        if selection >= 0 and selection < len(self.available_devices):
+            device = self.available_devices[selection]
+            self.recorder.set_device_config(
+                device_id=device['id'],
+                sample_rate=device.get('default_samplerate', 44100),
+                channels=1,
+            )
+            self._log(f"Microphone selected: {device['name']} ({device.get('default_samplerate', 44100)} Hz)")
 
     def _on_audio_chunk(self, audio_chunk):
         pass
+
+    def _prepare_waveform_for_model(self, samples, source_sample_rate):
+        if isinstance(samples, np.ndarray):
+            waveform = torch.from_numpy(samples).float()
+        elif isinstance(samples, torch.Tensor):
+            waveform = samples.float()
+        else:
+            waveform = torch.tensor(samples, dtype=torch.float32)
+
+        if waveform.dim() > 1:
+            waveform = waveform.squeeze()
+        if waveform.dim() == 0:
+            waveform = waveform.unsqueeze(0)
+
+        if source_sample_rate != MODEL_SAMPLE_RATE:
+            waveform = torchaudio.functional.resample(waveform.unsqueeze(0), source_sample_rate, MODEL_SAMPLE_RATE).squeeze(0)
+
+        if waveform.numel() > TARGET_SAMPLES:
+            start = (waveform.numel() - TARGET_SAMPLES) // 2
+            waveform = waveform[start:start + TARGET_SAMPLES]
+        elif waveform.numel() < TARGET_SAMPLES:
+            pad_total = TARGET_SAMPLES - waveform.numel()
+            pad_left = pad_total // 2
+            pad_right = pad_total - pad_left
+            left_pad = waveform[:1].expand(pad_left) if pad_left > 0 else waveform[:0]
+            right_pad = waveform[-1:].expand(pad_right) if pad_right > 0 else waveform[:0]
+            waveform = torch.cat([left_pad, waveform, right_pad])
+
+        return waveform.unsqueeze(0)
 
     def _browse_model(self):
         filename = filedialog.askopenfilename(
@@ -1017,18 +1082,14 @@ class KeystrokeDetectionUI:
                         audio_data, sr = sf.read(str(wav_file), dtype='float32')
 
                         if len(audio_data.shape) == 1:
-                            waveform = torch.from_numpy(audio_data).unsqueeze(0)
+                            waveform = audio_data
                         else:
-                            waveform = torch.from_numpy(audio_data.mean(axis=1)).unsqueeze(0)
+                            waveform = audio_data.mean(axis=1)
 
-                        if sr != 44100:
-                            waveform = torchaudio.transforms.Resample(sr, 44100)(waveform)
+                        waveform = self._prepare_waveform_for_model(waveform, sr)
 
-                        # Trim to TARGET_SAMPLES — no padding, matching CNN.ipynb inference
-                        if waveform.shape[1] > TARGET_SAMPLES:
-                            waveform = waveform[:, :TARGET_SAMPLES]
-                        elif waveform.shape[1] < TARGET_SAMPLES:
-                            self._log(f"Skipping {wav_file.name}: too short ({waveform.shape[1]} < {TARGET_SAMPLES})", "WARNING")
+                        if waveform.shape[1] != TARGET_SAMPLES:
+                            self._log(f"Skipping {wav_file.name}: unexpected prepared shape {waveform.shape}", "WARNING")
                             errors += 1
                             continue
 
@@ -1257,20 +1318,15 @@ Label | Times Predicted | % of All Predictions
             self._log(f"Loaded: {audio_data.shape}, sample rate: {sr} Hz")
 
             if len(audio_data.shape) == 1:
-                waveform = torch.from_numpy(audio_data).unsqueeze(0)
+                waveform = audio_data
             else:
-                waveform = torch.from_numpy(audio_data.mean(axis=1)).unsqueeze(0)
+                waveform = audio_data.mean(axis=1)
                 self._log("Converted to mono")
 
-            if sr != 44100:
-                waveform = torchaudio.transforms.Resample(sr, 44100)(waveform)
-                self._log("Resampled to 44100 Hz")
+            waveform = self._prepare_waveform_for_model(waveform, sr)
 
-            # Trim to TARGET_SAMPLES — no padding, matching CNN.ipynb inference
-            if waveform.shape[1] > TARGET_SAMPLES:
-                waveform = waveform[:, :TARGET_SAMPLES]
-            elif waveform.shape[1] < TARGET_SAMPLES:
-                self._log(f"Audio too short ({waveform.shape[1]} < {TARGET_SAMPLES}), cannot process", "WARNING")
+            if waveform.shape[1] != TARGET_SAMPLES:
+                self._log(f"Audio could not be normalized to {TARGET_SAMPLES} samples, cannot process", "WARNING")
                 messagebox.showwarning("Warning", f"Audio segment too short.\nGot {waveform.shape[1]} samples, need {TARGET_SAMPLES}.")
                 return
 
@@ -1358,18 +1414,9 @@ Label | Times Predicted | % of All Predictions
 
                     for keystroke in keystrokes:
                         try:
-                            self._log(f"Processing keystroke: {len(keystroke)} samples ({len(keystroke)/44100:.4f}s)")
+                            self._log(f"Processing keystroke: {len(keystroke)} samples ({len(keystroke)/self.recorder.sample_rate:.4f}s)")
 
-                            # Trim to TARGET_SAMPLES — no padding, matching CNN.ipynb inference
-                            if len(keystroke) > TARGET_SAMPLES:
-                                keystroke = keystroke[:TARGET_SAMPLES]
-                            elif len(keystroke) < TARGET_SAMPLES:
-                                self._log(f"Keystroke too short ({len(keystroke)} < {TARGET_SAMPLES}), skipping", "WARNING")
-                                continue
-
-                            waveform = torch.from_numpy(keystroke).float()
-                            if waveform.dim() > 1:
-                                waveform = waveform.squeeze()
+                            waveform = self._prepare_waveform_for_model(keystroke, self.recorder.sample_rate)
 
                             mel_spec = self.preprocessor.process_audio(waveform)
 
@@ -1380,7 +1427,7 @@ Label | Times Predicted | % of All Predictions
                             if self.save_mel_specs:
                                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
                                 self._save_debug_mel_spec(mel_spec, f"live_keystroke_{timestamp}")
-                                sf.write(str(self.debug_dir / f"live_keystroke_{timestamp}.wav"), keystroke, 44100)
+                                sf.write(str(self.debug_dir / f"live_keystroke_{timestamp}.wav"), np.asarray(keystroke, dtype=np.float32), self.recorder.sample_rate)
                                 self._log(f"Saved debug files: {timestamp}", "DEBUG")
 
                             with torch.no_grad():
