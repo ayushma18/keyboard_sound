@@ -1,0 +1,8 @@
+Session: qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq
+Microphone: dji
+Keyboard: aula-ayu-home-desk-30-mrng-middle
+Start Time: 2026-03-20T08:19:18.142976
+Duration: 26.00 seconds (26 chunks)
+Keystrokes: 30
+Sample Rate: 44100
+Channels: 1
