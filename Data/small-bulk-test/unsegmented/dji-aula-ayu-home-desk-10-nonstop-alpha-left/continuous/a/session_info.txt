@@ -1,0 +1,8 @@
+Session: aaaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeeffffffffffgggggggggghhhhhhhhhhiiiiiiiiiijjjjjjjjjjkkkkkkkkkkllllllllllmmmmmmmmmmnnnnnnnnnnooooooooooppppppppppqqqqqqqqqqrrrrrrrrrrssssssssssttttttttttuuuuuuuuuuvvvvvvvvvvwwwwwwwwwwxxxxxxxxxxyyyyyyyyyyzzzzzzzzzzz
+Microphone: dji
+Keyboard: aula-ayu-home-desk-10-nonstop-alpha-left
+Start Time: 2026-03-20T07:49:31.400265
+Duration: 244.00 seconds (244 chunks)
+Keystrokes: 261
+Sample Rate: 44100
+Channels: 1
