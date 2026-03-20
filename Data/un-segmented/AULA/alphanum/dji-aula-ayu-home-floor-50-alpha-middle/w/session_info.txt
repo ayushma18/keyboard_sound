@@ -1,0 +1,8 @@
+Session: wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+Microphone: dji
+Keyboard: aula-ayu-home-floor-100-day-middle
+Start Time: 2026-03-20T13:33:17.341099
+Duration: 44.00 seconds (44 chunks)
+Keystrokes: 50
+Sample Rate: 44100
+Channels: 1
