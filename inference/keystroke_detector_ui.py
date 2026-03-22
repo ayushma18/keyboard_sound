@@ -27,10 +27,15 @@ import math
 from torchvision.ops import SqueezeExcitation
 from torchvision.transforms import Compose, ToTensor
 
-# (64-1) * hop_length=256 → exactly 64 time frames matching CNN.ipynb training
-TARGET_SAMPLES = 16128
+# Training WAV files are 18963 samples @ 44100 Hz (0.43s):
+#   pre_trigger=4410 (0.1s) + post_trigger=14553 (0.33s) = 18963 samples
+# With hop_length=256 and torchaudio center=True:
+#   floor(18963 / 256) + 1 = 75 time frames  →  mel shape (1, 64, 75)
+# CNN uses AdaptiveAvgPool2d(1) so handles 75 frames fine.
+# CoAtNet requires exactly 64×64 — trim time axis to 64 frames before inference.
+TARGET_SAMPLES = 18963
 MODEL_SAMPLE_RATE = 44100
-MODEL_TARGET_DURATION = TARGET_SAMPLES / MODEL_SAMPLE_RATE
+MODEL_TARGET_DURATION = TARGET_SAMPLES / MODEL_SAMPLE_RATE  # 0.4300 s
 
 
 class Stem(nn.Sequential):
@@ -268,7 +273,8 @@ class AudioPreprocessor:
     Uses PHONE_MEL_CONFIG from cnn_shared:
         n_mels=64, hop_length=256, n_fft=2048, win_length=1024,
         f_min=298.97, f_max=19569.78, power=1.0 (amplitude + log2)
-    Input must be exactly TARGET_SAMPLES=16128 → (1, 64, 64) output.
+    Input must be exactly TARGET_SAMPLES=18963 → (1, 64, 75) output for CNN.
+    For CoAtNet, trim time axis to 64 before passing to model.
     """
 
     def __init__(self, sample_rate=44100):
@@ -281,6 +287,13 @@ class AudioPreprocessor:
             waveform = torch.from_numpy(waveform).float()
         if waveform.dim() == 1:
             waveform = waveform.unsqueeze(0)
+        # Peak-normalize to 0.3 so DJI mic amplitude matches training data levels.
+        # Training data (phone WAV files) was typically loaded at [-1,1] range with
+        # peak amplitude ~0.2–0.4. DJI mic often records at higher absolute levels,
+        # shifting all mel-spectrogram values upward and causing misclassification.
+        peak = waveform.abs().max()
+        if peak > 1e-6:
+            waveform = waveform * (0.3 / peak)
         return self.transforms(waveform)
 
 
@@ -297,11 +310,11 @@ class AudioRecorder:
         self.threshold = 0.06
         self.channels = 1
 
-        # segment_duration derived from TARGET_SAMPLES — matches CNN.ipynb exactly
-        self.segment_duration = TARGET_SAMPLES / sample_rate  # 0.3657s → 64 frames
+        # segment_duration derived from TARGET_SAMPLES — matches training data exactly
+        self.segment_duration = TARGET_SAMPLES / sample_rate  # 18963/44100 = 0.4300s → 75 frames
         self.detection_buffer_size = int(sample_rate * 1.0)
         self.last_detection_time = 0
-        self.min_keystroke_interval = 0.12
+        self.min_keystroke_interval = 0.25
         self.processed_sample_index = 0
         self.recent_detection_times = deque(maxlen=5)
 
@@ -363,8 +376,8 @@ class AudioRecorder:
         self.is_recording = False
 
     def compute_onset_strength(self, audio: np.ndarray,
-                                hop_length: int = 512,
-                                win_length: int = 2048) -> np.ndarray:
+                                hop_length: int = 256,
+                                win_length: int = 1024) -> np.ndarray:
         from scipy import signal as scipy_signal
 
         f, t, Zxx = scipy_signal.stft(audio, fs=self.sample_rate,
@@ -372,7 +385,7 @@ class AudioRecorder:
                                       noverlap=win_length - hop_length)
         magnitude = np.abs(Zxx)
 
-        freq_mask = (f >= 50) & (f <= 5000)
+        freq_mask = (f >= 50) & (f <= 8000)
         magnitude_filtered = magnitude[freq_mask, :]
 
         onset_env = np.zeros(magnitude_filtered.shape[1])
@@ -386,15 +399,19 @@ class AudioRecorder:
         return onset_env
 
     def find_peaks_with_quality(self, onset_env: np.ndarray,
-                                  hop_length: int = 512) -> List[Tuple[int, float]]:
+                                  hop_length: int = 256) -> List[Tuple[int, float]]:
         from scipy.ndimage import maximum_filter
 
         if len(onset_env) < 10:
             return []
 
-        threshold = np.percentile(onset_env, 80)
-        min_absolute_threshold = np.max(onset_env) * 0.15
-        threshold = max(threshold, min_absolute_threshold)
+        mean_onset = np.mean(onset_env)
+        threshold = max(
+            np.percentile(onset_env, 85),           # raised from 70 — noise always has a 70th-pct peak
+            np.max(onset_env) * max(self.threshold, 0.06),  # raised from 0.02
+            mean_onset * 4.0,                       # peak must be 4× avg onset (rejects flat noise)
+            1e-10,
+        )
 
         min_distance_frames = int(0.10 * self.sample_rate / hop_length)
         size = min_distance_frames * 2 + 1
@@ -411,15 +428,25 @@ class AudioRecorder:
 
         return peaks_with_quality
 
-    def extract_segment_centered(self, audio: np.ndarray, peak_sample: int, target_samples: int = TARGET_SAMPLES) -> np.ndarray:
-        """Extract target_samples centered around peak. No padding."""
-        start = peak_sample - target_samples // 2
+    def extract_segment_after_onset(self, audio: np.ndarray, peak_sample: int, target_samples: int = TARGET_SAMPLES) -> np.ndarray:
+        """Extract a fixed window that starts slightly before the peak, matching training-style segmentation."""
+        pre_trigger_samples = int(0.10 * self.sample_rate)
+        start = max(0, peak_sample - pre_trigger_samples)
         end = start + target_samples
 
-        start = max(0, start)
-        end = min(len(audio), end)
+        if end > len(audio):
+            end = len(audio)
+            start = max(0, end - target_samples)
 
-        return audio[start:end]
+        segment = audio[start:end]
+        if len(segment) < target_samples:
+            pad_width = target_samples - len(segment)
+            if len(segment) == 0:
+                segment = np.zeros(target_samples, dtype=np.float32)
+            else:
+                segment = np.pad(segment, (0, pad_width), mode='edge')
+
+        return segment[:target_samples]
 
     def validate_segment_quality(self, segment: np.ndarray, target_samples: int = TARGET_SAMPLES) -> Tuple[bool, float]:
         """Validate segment quality. Segment must be exactly TARGET_SAMPLES."""
@@ -435,14 +462,16 @@ class AudioRecorder:
         peak = np.max(np.abs(segment))
         peak_to_rms = peak / (rms + 1e-10)
 
-        if peak_to_rms < 2.0:
+        # Keystroke: sharp attack → peak/RMS typically 5–15.
+        # Background noise: constant amplitude → peak/RMS typically 1.5–2.5.
+        if peak_to_rms < 3.5:
             return False, 0.0
 
         fft = np.fft.rfft(segment)
         freqs = np.fft.rfftfreq(len(segment), 1 / self.sample_rate)
         magnitude = np.abs(fft)
 
-        freq_mask = (freqs >= 50) & (freqs <= 5000)
+        freq_mask = (freqs >= 50) & (freqs <= 8000)
         if np.sum(freq_mask) == 0:
             return False, 0.0
 
@@ -450,7 +479,7 @@ class AudioRecorder:
         total_energy = np.sum(magnitude**2)
         energy_ratio = keystroke_energy / (total_energy + 1e-10)
 
-        if energy_ratio < 0.6:
+        if energy_ratio < 0.3:
             return False, 0.0
 
         quality = min(1.0, (peak_to_rms / 10.0) * energy_ratio)
@@ -464,11 +493,19 @@ class AudioRecorder:
 
         current_time = time.time()
 
-        if current_time - self.last_detection_time < 0.08:
+        if current_time - self.last_detection_time < 0.25:
             return []
 
-        audio = np.array(self.audio_buffer)
+        # Take ONE atomic snapshot of the buffer.
+        # Using a single snapshot ensures that the indices used for onset detection,
+        # segment extraction, and the final buffer flush are all consistent.
+        # Without this, the audio callback thread can add new samples between the
+        # np.array() call and the buffer_list flush, shifting indices and leaving
+        # the same keystroke's decaying audio in the buffer to re-trigger.
+        buffer_snapshot = list(self.audio_buffer)
+        audio = np.array(buffer_snapshot, dtype=np.float32)
         buffer_length = len(audio)
+
         new_audio_start = max(0, buffer_length - int(self.sample_rate * 1.0))
 
         if new_audio_start >= buffer_length:
@@ -476,7 +513,7 @@ class AudioRecorder:
 
         audio_to_process = audio[new_audio_start:]
 
-        hop_length = 512
+        hop_length = 256
         onset_env = self.compute_onset_strength(audio_to_process, hop_length=hop_length)
 
         if len(onset_env) == 0:
@@ -489,16 +526,13 @@ class AudioRecorder:
         for peak_sample, peak_quality in peaks_with_quality:
             absolute_peak = new_audio_start + peak_sample
 
-            # Skip if segment would go out of buffer bounds
-            if absolute_peak < segment_samples // 2:
+            pre_trigger_samples = int(0.10 * self.sample_rate)
+            if absolute_peak < pre_trigger_samples:
                 continue
-            if absolute_peak + segment_samples // 2 > buffer_length:
+            if absolute_peak + (segment_samples - pre_trigger_samples) > buffer_length:
                 continue
 
-            segment = self.extract_segment_centered(audio, absolute_peak, target_samples=segment_samples)
-
-            if len(segment) > segment_samples:
-                segment = segment[:segment_samples]
+            segment = self.extract_segment_after_onset(audio, absolute_peak, target_samples=segment_samples)
 
             is_valid, quality_score = self.validate_segment_quality(segment, target_samples=segment_samples)
 
@@ -514,19 +548,31 @@ class AudioRecorder:
                     'peak_quality': peak_quality
                 })
 
-                self.last_detection_time = current_time
-                self.recent_detection_times.append(current_time)
+        if not valid_keystrokes:
+            keep_samples = int(self.sample_rate * 2.0)
+            if len(buffer_snapshot) > keep_samples:
+                self.audio_buffer = deque(buffer_snapshot[-keep_samples:], maxlen=self.audio_buffer.maxlen)
+            return []
 
-                print(f"[Keystroke Detected] Position: {absolute_peak/self.sample_rate:.3f}s, "
-                      f"Quality: {quality_score:.2f}, Peak: {peak_quality:.2f}")
-                break
+        chosen = max(valid_keystrokes, key=lambda item: (item['peak_sample'], item['quality'], item['peak_quality']))
 
-        keep_samples = int(self.sample_rate * 2.0)
-        if len(self.audio_buffer) > keep_samples:
-            buffer_list = list(self.audio_buffer)
-            self.audio_buffer = deque(buffer_list[-keep_samples:], maxlen=self.audio_buffer.maxlen)
+        self.last_detection_time = current_time
+        self.recent_detection_times.append(current_time)
 
-        return [ks['audio'] for ks in valid_keystrokes]
+        print(f"[Keystroke Detected] Position: {chosen['peak_sample']/self.sample_rate:.3f}s, "
+              f"Quality: {chosen['quality']:.2f}, Peak: {chosen['peak_quality']:.2f}")
+
+        # Flush buffer using snapshot indices (consistent — no race condition).
+        # Keep only audio that comes after the end of the detected segment so the
+        # same keystroke's decaying ringdown cannot re-trigger on the next call.
+        pre_trigger_samples = int(0.10 * self.sample_rate)
+        segment_end = min(
+            chosen['peak_sample'] + (segment_samples - pre_trigger_samples),
+            len(buffer_snapshot)
+        )
+        self.audio_buffer = deque(buffer_snapshot[segment_end:], maxlen=self.audio_buffer.maxlen)
+
+        return [chosen['audio']]
 
     def adjust_threshold(self, threshold):
         self.threshold = threshold
@@ -569,6 +615,8 @@ class KeystrokeDetectionUI:
         self.detection_history = []
 
         self.save_mel_specs = False
+        self._clear_timer = None
+        self.detected_model_type = 'CNN'  # updated after model load
         self.debug_dir = Path("model/debug_output")
         self.debug_dir.mkdir(parents=True, exist_ok=True)
         self.available_devices = []
@@ -576,7 +624,7 @@ class KeystrokeDetectionUI:
         self._create_widgets()
         self._log("Application started")
         self._log(f"Device: {self.device.upper()}")
-        self._log(f"Target samples: {TARGET_SAMPLES} ({TARGET_SAMPLES/MODEL_SAMPLE_RATE:.4f}s) → 64 time frames")
+        self._log(f"Target samples: {TARGET_SAMPLES} ({TARGET_SAMPLES/MODEL_SAMPLE_RATE:.4f}s) → 75 time frames (CNN) / 64 trimmed (CoAtNet)")
         self._log(f"Mel config: PHONE_MEL_CONFIG (n_mels=64, hop=256, power=1.0, log2)")
 
         self._auto_load_model()
@@ -849,8 +897,8 @@ class KeystrokeDetectionUI:
             waveform = torchaudio.functional.resample(waveform.unsqueeze(0), source_sample_rate, MODEL_SAMPLE_RATE).squeeze(0)
 
         if waveform.numel() > TARGET_SAMPLES:
-            start = (waveform.numel() - TARGET_SAMPLES) // 2
-            waveform = waveform[start:start + TARGET_SAMPLES]
+            # Trim from the front — onset is placed near the start of the segment
+            waveform = waveform[:TARGET_SAMPLES]
         elif waveform.numel() < TARGET_SAMPLES:
             pad_total = TARGET_SAMPLES - waveform.numel()
             pad_left = pad_total // 2
@@ -972,9 +1020,11 @@ class KeystrokeDetectionUI:
             self._log(f"Model parameters: {total_params:,}")
 
             with torch.no_grad():
-                test_output = self.model(torch.randn(1, 1, 64, 64).to(self.device))
+                test_shape = (1, 1, 64, 64) if model_type == 'CoAtNet' else (1, 1, 64, 75)
+                test_output = self.model(torch.randn(*test_shape).to(self.device))
                 self._log(f"Model test output shape: {test_output.shape}")
 
+            self.detected_model_type = model_type
             self.model_loaded = True
             self.model_status_label.config(text=f"✓ {model_type} model loaded successfully", fg='green')
             self.record_btn.config(state=tk.NORMAL)
@@ -1095,10 +1145,13 @@ class KeystrokeDetectionUI:
 
                         mel_spec = self.preprocessor.process_audio(waveform)
 
-                        if mel_spec.shape != torch.Size([1, 64, 64]):
+                        if mel_spec.shape[1] != 64 or mel_spec.shape[2] < 64:
                             self._log(f"Skipping {wav_file.name}: wrong shape {mel_spec.shape}", "WARNING")
                             errors += 1
                             continue
+
+                        if self.detected_model_type == 'CoAtNet' and mel_spec.shape[2] > 64:
+                            mel_spec = mel_spec[:, :, :64]
 
                         with torch.no_grad():
                             input_tensor = mel_spec.unsqueeze(0).to(self.device)
@@ -1334,6 +1387,9 @@ Label | Times Predicted | % of All Predictions
             mel_spec = self.preprocessor.process_audio(waveform)
             self._log(f"Mel-spectrogram shape: {mel_spec.shape}")
 
+            if self.detected_model_type == 'CoAtNet' and mel_spec.shape[2] > 64:
+                mel_spec = mel_spec[:, :, :64]
+
             if self.save_mel_specs:
                 self._save_debug_mel_spec(mel_spec, f"test_{os.path.basename(file_path)}")
 
@@ -1348,9 +1404,11 @@ Label | Times Predicted | % of All Predictions
 
             predicted_key = self.key_labels[top5_indices[0].item()]
             confidence = top5_probs[0].item() * 100
+            top5_indices_list = [top5_indices[i].item() for i in range(len(top5_indices))]
+            top5_probs_list = [top5_probs[i].item() for i in range(len(top5_probs))]
             self._log(f"Predicted: '{predicted_key}' (confidence: {confidence:.2f}%)")
 
-            self._update_detection_display(predicted_key, confidence, top5_indices, top5_probs)
+            self._update_detection_display(predicted_key, confidence, top5_indices_list, top5_probs_list)
             self.history_text.insert(
                 tk.END,
                 f"[{datetime.now().strftime('%H:%M:%S')}] '{predicted_key}' ({confidence:.1f}%) - {os.path.basename(file_path)}\n")
@@ -1381,6 +1439,8 @@ Label | Times Predicted | % of All Predictions
             self.is_recording = True
             self.stop_processing = False
             self.start_time = time.time()
+            self.recorder.audio_buffer.clear()
+            self.recorder.last_detection_time = 0
             self.record_btn.config(text="⏹ Stop Recording", bg='#e74c3c')
             self.status_bar.config(text="Recording...")
             self._log("Recording started")
@@ -1420,9 +1480,12 @@ Label | Times Predicted | % of All Predictions
 
                             mel_spec = self.preprocessor.process_audio(waveform)
 
-                            if mel_spec.shape != torch.Size([1, 64, 64]):
-                                self._log(f"Invalid mel-spec shape: {mel_spec.shape}, expected [1, 64, 64]", "WARNING")
+                            if mel_spec.shape[1] != 64 or mel_spec.shape[2] < 64:
+                                self._log(f"Invalid mel-spec shape: {mel_spec.shape}, need (1,64,≥64)", "WARNING")
                                 continue
+
+                            if self.detected_model_type == 'CoAtNet' and mel_spec.shape[2] > 64:
+                                mel_spec = mel_spec[:, :, :64]
 
                             if self.save_mel_specs:
                                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -1440,10 +1503,14 @@ Label | Times Predicted | % of All Predictions
 
                             predicted_key = self.key_labels[top5_indices[0].item()]
                             confidence = top5_probs[0].item() * 100
+                            # Convert tensors to plain Python lists so the UI thread
+                            # never needs to touch GPU/CPU tensors directly.
+                            top5_indices_list = [top5_indices[i].item() for i in range(len(top5_indices))]
+                            top5_probs_list = [top5_probs[i].item() for i in range(len(top5_probs))]
 
                             if confidence > 10.0:
                                 self._log(f"✓ Detected: '{predicted_key}' (confidence: {confidence:.1f}%)")
-                                self.root.after(0, self._update_detection_display, predicted_key, confidence, top5_indices, top5_probs)
+                                self.root.after(0, self._update_detection_display, predicted_key, confidence, top5_indices_list, top5_probs_list)
                                 self.root.after(0, self._add_to_history, predicted_key, confidence)
                                 self.keystroke_count += 1
                                 self.detection_history.append(confidence)
@@ -1470,19 +1537,45 @@ Label | Times Predicted | % of All Predictions
             time.sleep(0.05)
 
     def _update_detection_display(self, predicted_key, confidence, top5_indices, top5_probs):
-        self.current_key_label.config(text=predicted_key.upper())
+        # Flash the key label green so each new detection is visually distinct.
+        self.current_key_label.config(text=predicted_key.upper(), bg='#2ecc71')
+        self.root.after(350, lambda: self.current_key_label.config(bg='#ecf0f1'))
         self.confidence_label.config(text=f"Confidence: {confidence:.1f}%")
 
+        # Normalise bars relative to #1 so #2–#5 are always clearly visible
+        # even when the model is very confident (e.g. 99% on #1, 0.5% on #2).
+        max_prob = float(top5_probs[0]) if top5_probs else 1e-6
+        max_prob = max(max_prob, 1e-6)
+
         for i in range(5):
-            key = self.key_labels[top5_indices[i].item()]
-            conf = top5_probs[i].item()
+            idx = int(top5_indices[i])
+            prob = float(top5_probs[i])
+            key = self.key_labels[idx]
             self.prediction_labels[i]['key'].config(text=key.upper())
-            self.prediction_labels[i]['conf'].config(text=f"{conf*100:.2f}%")
+            self.prediction_labels[i]['conf'].config(text=f"{prob*100:.2f}%")
             canvas = self.prediction_labels[i]['bar']
             canvas.delete('all')
-            bar_width = int(190 * conf)
+            normalized = prob / max_prob          # #1 always fills to full width
+            bar_width = max(2, int(190 * normalized))
             color = '#27ae60' if i == 0 else '#3498db'
             canvas.create_rectangle(5, 5, 5 + bar_width, 15, fill=color, outline='')
+
+        # Auto-clear the display after 4 s of no new detection.
+        self._schedule_display_clear()
+
+    def _schedule_display_clear(self):
+        if hasattr(self, '_clear_timer') and self._clear_timer is not None:
+            self.root.after_cancel(self._clear_timer)
+        self._clear_timer = self.root.after(4000, self._auto_clear_display)
+
+    def _auto_clear_display(self):
+        self.current_key_label.config(text="-", bg='#ecf0f1')
+        self.confidence_label.config(text="Confidence: -")
+        for i in range(5):
+            self.prediction_labels[i]['key'].config(text="-")
+            self.prediction_labels[i]['conf'].config(text="0.00%")
+            self.prediction_labels[i]['bar'].delete('all')
+        self._clear_timer = None
 
     def _add_to_history(self, key, confidence):
         timestamp = datetime.now().strftime("%H:%M:%S")
