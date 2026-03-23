@@ -282,18 +282,30 @@ class AudioPreprocessor:
         self.transforms = build_mel_transform(PHONE_MEL_CONFIG)
 
     def process_audio(self, waveform):
-        """Process audio to mel spectrogram - returns (1, 64, 64) tensor"""
+        """Process audio to mel spectrogram - returns (1, 64, 75) tensor"""
         if isinstance(waveform, np.ndarray):
             waveform = torch.from_numpy(waveform).float()
         if waveform.dim() == 1:
             waveform = waveform.unsqueeze(0)
-        # Peak-normalize to 0.3 so DJI mic amplitude matches training data levels.
-        # Training data (phone WAV files) was typically loaded at [-1,1] range with
-        # peak amplitude ~0.2–0.4. DJI mic often records at higher absolute levels,
-        # shifting all mel-spectrogram values upward and causing misclassification.
-        peak = waveform.abs().max()
-        if peak > 1e-6:
-            waveform = waveform * (0.3 / peak)
+        # RMS-normalize instead of peak-normalize.
+        #
+        # Why peak-normalize was wrong:
+        #   peak = max(|sample|) is dominated by a single sample — often a noise
+        #   spike rather than the keystroke transient.  Different noise each time
+        #   → different scaling factor → after log2 the whole mel spectrogram
+        #   shifts by a random additive offset → random predictions.
+        #
+        # RMS is an average energy measure and stays consistent across noise
+        # conditions.  Target RMS ≈ 0.05 matches typical training WAV files
+        # (phone recordings with peaks ~0.2–0.4, mostly quiet background).
+        #
+        # Training data (cnn_shared.AudioDataset) loaded WAV files raw (no
+        # normalization).  With augmentation (volume reduction 2–15 dB, noise
+        # at SNR 5–30 dB) the model saw RMS roughly in [0.01, 0.10].
+        rms = torch.sqrt(torch.mean(waveform ** 2))
+        target_rms = 0.05
+        if rms > 1e-6:
+            waveform = waveform * (target_rms / rms)
         return self.transforms(waveform)
 
 
@@ -406,10 +418,11 @@ class AudioRecorder:
             return []
 
         mean_onset = np.mean(onset_env)
+        std_onset = np.std(onset_env)
         threshold = max(
-            np.percentile(onset_env, 85),           # raised from 70 — noise always has a 70th-pct peak
-            np.max(onset_env) * max(self.threshold, 0.06),  # raised from 0.02
-            mean_onset * 4.0,                       # peak must be 4× avg onset (rejects flat noise)
+            np.percentile(onset_env, 75),           # 75th pctl: balanced between 70 (too loose) and 85 (too strict)
+            np.max(onset_env) * max(self.threshold, 0.06),
+            mean_onset + 3.0 * std_onset,           # adaptive: mean + 3σ (reject noise while keeping keystrokes)
             1e-10,
         )
 
@@ -449,7 +462,13 @@ class AudioRecorder:
         return segment[:target_samples]
 
     def validate_segment_quality(self, segment: np.ndarray, target_samples: int = TARGET_SAMPLES) -> Tuple[bool, float]:
-        """Validate segment quality. Segment must be exactly TARGET_SAMPLES."""
+        """Validate that a segment contains a real keystroke, not just noise.
+
+        Uses transient SNR: compare RMS in a short window around the peak to
+        the RMS of the rest of the segment.  A keystroke concentrates energy in
+        a sharp burst (transient SNR >> 1); noise spreads energy uniformly
+        (transient SNR ≈ 1).  This works at any noise level.
+        """
         if len(segment) < target_samples:
             return False, 0.0
 
@@ -460,13 +479,36 @@ class AudioRecorder:
             return False, 0.0
 
         peak = np.max(np.abs(segment))
-        peak_to_rms = peak / (rms + 1e-10)
 
-        # Keystroke: sharp attack → peak/RMS typically 5–15.
-        # Background noise: constant amplitude → peak/RMS typically 1.5–2.5.
-        if peak_to_rms < 3.5:
+        # ── Transient SNR ────────────────────────────────────────────────
+        # Compare energy in a ±2 ms window around the peak to the rest of the
+        # segment (excluding ±20 ms around the peak so the transient itself
+        # doesn't inflate the "noise" estimate).
+        peak_idx = np.argmax(np.abs(segment))
+        half_peak_win = int(0.002 * self.sample_rate)   # ±2 ms
+        half_excl_win = int(0.020 * self.sample_rate)    # ±20 ms
+
+        peak_start = max(0, peak_idx - half_peak_win)
+        peak_end = min(len(segment), peak_idx + half_peak_win)
+        peak_region = segment[peak_start:peak_end]
+
+        excl_start = max(0, peak_idx - half_excl_win)
+        excl_end = min(len(segment), peak_idx + half_excl_win)
+        noise_region = np.concatenate([segment[:excl_start], segment[excl_end:]])
+
+        if len(noise_region) > 100 and len(peak_region) > 0:
+            peak_rms = np.sqrt(np.mean(peak_region**2))
+            noise_rms = np.sqrt(np.mean(noise_region**2))
+            transient_snr = peak_rms / (noise_rms + 1e-10)
+        else:
+            transient_snr = peak / (rms + 1e-10)
+
+        # Keystroke transient SNR typically 4–20 (sharp attack above noise).
+        # Pure noise ≈ 1.0–2.0 (uniform energy, no burst).
+        if transient_snr < 2.5:
             return False, 0.0
 
+        # ── Frequency content ────────────────────────────────────────────
         fft = np.fft.rfft(segment)
         freqs = np.fft.rfftfreq(len(segment), 1 / self.sample_rate)
         magnitude = np.abs(fft)
@@ -482,7 +524,7 @@ class AudioRecorder:
         if energy_ratio < 0.3:
             return False, 0.0
 
-        quality = min(1.0, (peak_to_rms / 10.0) * energy_ratio)
+        quality = min(1.0, (transient_snr / 10.0) * energy_ratio)
         return True, quality
 
     def detect_keystrokes(self):
@@ -536,7 +578,7 @@ class AudioRecorder:
 
             is_valid, quality_score = self.validate_segment_quality(segment, target_samples=segment_samples)
 
-            if is_valid and quality_score > 0.3:
+            if is_valid and quality_score > 0.25:
                 time_since_last = current_time - self.last_detection_time
                 if time_since_last < self.min_keystroke_interval and len(valid_keystrokes) > 0:
                     continue
