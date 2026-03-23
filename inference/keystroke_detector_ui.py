@@ -1658,7 +1658,7 @@ Label | Times Predicted | % of All Predictions
     def _save_debug_mel_spec(self, mel_spec, filename):
         try:
             plt.figure(figsize=(8, 6))
-            plt.imshow(mel_spec.squeeze().numpy(), aspect='auto', origin='lower', cmap='viridis')
+            plt.imshow(mel_spec.squeeze().numpy(), aspect='auto', cmap='viridis')
             plt.colorbar(label='Log Magnitude')
             plt.title(f'Mel Spectrogram - {filename}')
             plt.xlabel('Time')
