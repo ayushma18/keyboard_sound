@@ -326,7 +326,7 @@ class AudioRecorder:
         self.segment_duration = TARGET_SAMPLES / sample_rate  # 18963/44100 = 0.4300s → 75 frames
         self.detection_buffer_size = int(sample_rate * 1.0)
         self.last_detection_time = 0
-        self.min_keystroke_interval = 0.25
+        self.min_keystroke_interval = 0.08
         self.processed_sample_index = 0
         self.recent_detection_times = deque(maxlen=5)
 
@@ -528,22 +528,26 @@ class AudioRecorder:
         return True, quality
 
     def detect_keystrokes(self):
-        """Advanced keystroke detection using onset detection and quality validation."""
+        """Advanced keystroke detection — returns ALL valid keystrokes in time order.
+
+        Supports fast/continuous typing by:
+        - Using a short cooldown (0.08s) so rapid keystrokes aren't blocked
+        - Returning multiple keystrokes per call when several peaks are found
+        - Flushing the buffer past the last detected keystroke only
+        """
         segment_samples = int(round(MODEL_TARGET_DURATION * self.sample_rate))
         if len(self.audio_buffer) < max(self.detection_buffer_size, segment_samples):
             return []
 
         current_time = time.time()
 
-        if current_time - self.last_detection_time < 0.25:
+        # Short cooldown just to avoid redundant processing of the same audio.
+        # The per-peak minimum distance in find_peaks_with_quality (0.10s) is
+        # the real guard against double-triggers.
+        if current_time - self.last_detection_time < 0.08:
             return []
 
         # Take ONE atomic snapshot of the buffer.
-        # Using a single snapshot ensures that the indices used for onset detection,
-        # segment extraction, and the final buffer flush are all consistent.
-        # Without this, the audio callback thread can add new samples between the
-        # np.array() call and the buffer_list flush, shifting indices and leaving
-        # the same keystroke's decaying audio in the buffer to re-trigger.
         buffer_snapshot = list(self.audio_buffer)
         audio = np.array(buffer_snapshot, dtype=np.float32)
         buffer_length = len(audio)
@@ -564,11 +568,11 @@ class AudioRecorder:
         peaks_with_quality = self.find_peaks_with_quality(onset_env, hop_length=hop_length)
 
         valid_keystrokes = []
+        pre_trigger_samples = int(0.10 * self.sample_rate)
 
         for peak_sample, peak_quality in peaks_with_quality:
             absolute_peak = new_audio_start + peak_sample
 
-            pre_trigger_samples = int(0.10 * self.sample_rate)
             if absolute_peak < pre_trigger_samples:
                 continue
             if absolute_peak + (segment_samples - pre_trigger_samples) > buffer_length:
@@ -579,10 +583,6 @@ class AudioRecorder:
             is_valid, quality_score = self.validate_segment_quality(segment, target_samples=segment_samples)
 
             if is_valid and quality_score > 0.25:
-                time_since_last = current_time - self.last_detection_time
-                if time_since_last < self.min_keystroke_interval and len(valid_keystrokes) > 0:
-                    continue
-
                 valid_keystrokes.append({
                     'audio': segment,
                     'peak_sample': absolute_peak,
@@ -596,25 +596,27 @@ class AudioRecorder:
                 self.audio_buffer = deque(buffer_snapshot[-keep_samples:], maxlen=self.audio_buffer.maxlen)
             return []
 
-        chosen = max(valid_keystrokes, key=lambda item: (item['peak_sample'], item['quality'], item['peak_quality']))
+        # Sort by time so keystrokes are returned in the order they were typed.
+        valid_keystrokes.sort(key=lambda item: item['peak_sample'])
 
         self.last_detection_time = current_time
-        self.recent_detection_times.append(current_time)
+        for _ in valid_keystrokes:
+            self.recent_detection_times.append(current_time)
 
-        print(f"[Keystroke Detected] Position: {chosen['peak_sample']/self.sample_rate:.3f}s, "
-              f"Quality: {chosen['quality']:.2f}, Peak: {chosen['peak_quality']:.2f}")
+        for ks in valid_keystrokes:
+            print(f"[Keystroke Detected] Position: {ks['peak_sample']/self.sample_rate:.3f}s, "
+                  f"Quality: {ks['quality']:.2f}, Peak: {ks['peak_quality']:.2f}")
 
-        # Flush buffer using snapshot indices (consistent — no race condition).
-        # Keep only audio that comes after the end of the detected segment so the
-        # same keystroke's decaying ringdown cannot re-trigger on the next call.
-        pre_trigger_samples = int(0.10 * self.sample_rate)
+        # Flush buffer past the LAST detected keystroke so earlier keystrokes
+        # don't re-trigger but any audio after the last one is preserved.
+        last_peak = valid_keystrokes[-1]['peak_sample']
         segment_end = min(
-            chosen['peak_sample'] + (segment_samples - pre_trigger_samples),
+            last_peak + (segment_samples - pre_trigger_samples),
             len(buffer_snapshot)
         )
         self.audio_buffer = deque(buffer_snapshot[segment_end:], maxlen=self.audio_buffer.maxlen)
 
-        return [chosen['audio']]
+        return [ks['audio'] for ks in valid_keystrokes]
 
     def adjust_threshold(self, threshold):
         self.threshold = threshold
@@ -1507,7 +1509,7 @@ Label | Times Predicted | % of All Predictions
         while not self.stop_processing:
             current_time = time.time()
 
-            if current_time - last_process_time >= 0.10:
+            if current_time - last_process_time >= 0.05:
                 try:
                     keystrokes = self.recorder.detect_keystrokes()
 
@@ -1576,7 +1578,7 @@ Label | Times Predicted | % of All Predictions
                 elapsed = int(current_time - self.start_time)
                 self.root.after(0, self._update_recording_time, elapsed)
 
-            time.sleep(0.05)
+            time.sleep(0.02)
 
     def _update_detection_display(self, predicted_key, confidence, top5_indices, top5_probs):
         # Flash the key label green so each new detection is visually distinct.
