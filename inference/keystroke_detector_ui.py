@@ -290,25 +290,6 @@ class AudioPreprocessor:
             waveform = torch.from_numpy(waveform).float()
         if waveform.dim() == 1:
             waveform = waveform.unsqueeze(0)
-        # RMS-normalize instead of peak-normalize.
-        #
-        # Why peak-normalize was wrong:
-        #   peak = max(|sample|) is dominated by a single sample — often a noise
-        #   spike rather than the keystroke transient.  Different noise each time
-        #   → different scaling factor → after log2 the whole mel spectrogram
-        #   shifts by a random additive offset → random predictions.
-        #
-        # RMS is an average energy measure and stays consistent across noise
-        # conditions.  Target RMS ≈ 0.05 matches typical training WAV files
-        # (phone recordings with peaks ~0.2–0.4, mostly quiet background).
-        #
-        # Training data (cnn_shared.AudioDataset) loaded WAV files raw (no
-        # normalization).  With augmentation (volume reduction 2–15 dB, noise
-        # at SNR 5–30 dB) the model saw RMS roughly in [0.01, 0.10].
-        rms = torch.sqrt(torch.mean(waveform ** 2))
-        target_rms = 0.05
-        if rms > 1e-6:
-            waveform = waveform * (target_rms / rms)
         return self.transforms(waveform)
 
 
