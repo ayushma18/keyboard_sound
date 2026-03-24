@@ -14,6 +14,7 @@ import numpy as np
 import threading
 import time
 import os
+import json
 from pathlib import Path
 from datetime import datetime
 from typing import List, Tuple, Dict
@@ -24,6 +25,8 @@ import soundfile as sf
 import sounddevice as sd
 from collections import deque
 import math
+import io
+from PIL import Image, ImageTk
 from torchvision.ops import SqueezeExcitation
 from torchvision.transforms import Compose, ToTensor
 
@@ -665,6 +668,9 @@ class KeystrokeDetectionUI:
         self.debug_dir.mkdir(parents=True, exist_ok=True)
         self.available_devices = []
 
+        self._prefs_path = Path(__file__).parent / ".keystroke_ui_prefs.json"
+        self._prefs = self._load_preferences()
+
         self._create_widgets()
         self._log("Application started")
         self._log(f"Device: {self.device.upper()}")
@@ -672,6 +678,22 @@ class KeystrokeDetectionUI:
         self._log(f"Mel config: PHONE_MEL_CONFIG (n_mels=64, hop=256, power=1.0, log2)")
 
         self._auto_load_model()
+
+    def _load_preferences(self):
+        try:
+            if self._prefs_path.exists():
+                with open(self._prefs_path, 'r') as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {}
+
+    def _save_preferences(self):
+        try:
+            with open(self._prefs_path, 'w') as f:
+                json.dump(self._prefs, f, indent=2)
+        except Exception as e:
+            self._log(f"Failed to save preferences: {e}", "WARNING")
 
     def _create_widgets(self):
         title_frame = tk.Frame(self.root, bg='#2c3e50', height=60)
@@ -766,6 +788,9 @@ class KeystrokeDetectionUI:
                        variable=self.save_mel_var, font=('Arial', 9),
                        command=self._toggle_save_mel).pack(side=tk.LEFT)
 
+        tk.Button(debug_frame, text="🗑 Clear Debug Output", command=self._clear_debug_output,
+                  font=('Arial', 9)).pack(side=tk.LEFT, padx=(15, 0))
+
         threshold_frame = tk.Frame(recording_frame)
         threshold_frame.pack(fill=tk.X, pady=5)
 
@@ -795,6 +820,10 @@ class KeystrokeDetectionUI:
 
         self.confidence_label = tk.Label(current_frame, text="Confidence: -", font=('Arial', 11))
         self.confidence_label.pack(side=tk.LEFT, padx=20)
+
+        self.mel_display_label = tk.Label(current_frame, bg='#ecf0f1', relief=tk.SUNKEN, borderwidth=1)
+        self.mel_display_label.pack(side=tk.LEFT, padx=(20, 0))
+        self._mel_photo = None  # prevent garbage collection
 
         tk.Label(results_frame, text="Top 5 Predictions:", font=('Arial', 10, 'bold')).pack(anchor=tk.W, pady=(10, 5))
 
@@ -889,11 +918,28 @@ class KeystrokeDetectionUI:
             self.mic_combo['values'] = device_names
             if device_names:
                 preferred_index = 0
-                for idx, device in enumerate(devices):
-                    device_name = device['name'].lower()
-                    if 'dji' in device_name or 'mic' in device_name:
-                        preferred_index = idx
-                        break
+                saved_mic = self._prefs.get("mic_name")
+
+                if saved_mic:
+                    # Try to match saved mic by name
+                    for idx, device in enumerate(devices):
+                        if device['name'] == saved_mic:
+                            preferred_index = idx
+                            self._log(f"Restored saved microphone: {saved_mic}")
+                            break
+                    else:
+                        # Saved mic not found, fall back to heuristic
+                        for idx, device in enumerate(devices):
+                            device_name = device['name'].lower()
+                            if 'dji' in device_name or 'mic' in device_name:
+                                preferred_index = idx
+                                break
+                else:
+                    for idx, device in enumerate(devices):
+                        device_name = device['name'].lower()
+                        if 'dji' in device_name or 'mic' in device_name:
+                            preferred_index = idx
+                            break
 
                 self.mic_combo.current(preferred_index)
                 selected = devices[preferred_index]
@@ -919,6 +965,8 @@ class KeystrokeDetectionUI:
                 sample_rate=device.get('default_samplerate', 44100),
                 channels=1,
             )
+            self._prefs["mic_name"] = device['name']
+            self._save_preferences()
             self._log(f"Microphone selected: {device['name']} ({device.get('default_samplerate', 44100)} Hz)")
 
     def _on_audio_chunk(self, audio_chunk):
@@ -961,6 +1009,14 @@ class KeystrokeDetectionUI:
             self.model_path_var.set(filename)
 
     def _auto_load_model(self):
+        # Try saved model path first
+        saved_model = self._prefs.get("model_path")
+        if saved_model and os.path.exists(saved_model):
+            self._log(f"Restoring last used model: {saved_model}")
+            self.model_path_var.set(saved_model)
+            self._load_model()
+            return
+
         self._log("Searching for model files...")
         for search_path in [".", "model", "../"]:
             for model_name in ["CoAtNet-1-Best-Phone.pkl", "CoAtNet-1-Phone.pkl"]:
@@ -1077,6 +1133,8 @@ class KeystrokeDetectionUI:
             self.status_bar.config(text=f"{model_type} model loaded: {os.path.basename(model_path)}")
 
             self._log(f"{model_type} model loaded successfully!")
+            self._prefs["model_path"] = str(Path(model_path).resolve())
+            self._save_preferences()
             messagebox.showinfo("Success", f"{model_type} model loaded successfully!")
 
         except Exception as e:
@@ -1452,7 +1510,7 @@ Label | Times Predicted | % of All Predictions
             top5_probs_list = [top5_probs[i].item() for i in range(len(top5_probs))]
             self._log(f"Predicted: '{predicted_key}' (confidence: {confidence:.2f}%)")
 
-            self._update_detection_display(predicted_key, confidence, top5_indices_list, top5_probs_list)
+            self._update_detection_display(predicted_key, confidence, top5_indices_list, top5_probs_list, mel_spec)
             self.history_text.insert(
                 tk.END,
                 f"[{datetime.now().strftime('%H:%M:%S')}] '{predicted_key}' ({confidence:.1f}%) - {os.path.basename(file_path)}\n")
@@ -1551,10 +1609,11 @@ Label | Times Predicted | % of All Predictions
                             # never needs to touch GPU/CPU tensors directly.
                             top5_indices_list = [top5_indices[i].item() for i in range(len(top5_indices))]
                             top5_probs_list = [top5_probs[i].item() for i in range(len(top5_probs))]
+                            mel_spec_np = mel_spec.squeeze().cpu().numpy().copy()
 
                             if confidence > 10.0:
                                 self._log(f"✓ Detected: '{predicted_key}' (confidence: {confidence:.1f}%)")
-                                self.root.after(0, self._update_detection_display, predicted_key, confidence, top5_indices_list, top5_probs_list)
+                                self.root.after(0, self._update_detection_display, predicted_key, confidence, top5_indices_list, top5_probs_list, mel_spec_np)
                                 self.root.after(0, self._add_to_history, predicted_key, confidence)
                                 self.keystroke_count += 1
                                 self.detection_history.append(confidence)
@@ -1580,11 +1639,15 @@ Label | Times Predicted | % of All Predictions
 
             time.sleep(0.02)
 
-    def _update_detection_display(self, predicted_key, confidence, top5_indices, top5_probs):
+    def _update_detection_display(self, predicted_key, confidence, top5_indices, top5_probs, mel_spec=None):
         # Flash the key label green so each new detection is visually distinct.
         self.current_key_label.config(text=predicted_key.upper(), bg='#2ecc71')
         self.root.after(350, lambda: self.current_key_label.config(bg='#ecf0f1'))
         self.confidence_label.config(text=f"Confidence: {confidence:.1f}%")
+
+        # Show mel spectrogram thumbnail
+        if mel_spec is not None:
+            self._render_mel_display(mel_spec)
 
         # Normalise bars relative to #1 so #2–#5 are always clearly visible
         # even when the model is very confident (e.g. 99% on #1, 0.5% on #2).
@@ -1607,6 +1670,31 @@ Label | Times Predicted | % of All Predictions
         # Auto-clear the display after 4 s of no new detection.
         self._schedule_display_clear()
 
+    def _render_mel_display(self, mel_spec):
+        """Render mel spectrogram tensor as a thumbnail in the results section."""
+        try:
+            if isinstance(mel_spec, torch.Tensor):
+                data = mel_spec.squeeze().cpu().numpy()
+            else:
+                data = np.squeeze(mel_spec)
+
+            fig, ax = plt.subplots(figsize=(2.0, 1.2), dpi=80)
+            ax.imshow(data, aspect='auto', origin='lower', cmap='magma')
+            ax.set_xticks([])
+            ax.set_yticks([])
+            fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
+
+            buf = io.BytesIO()
+            fig.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.02)
+            plt.close(fig)
+            buf.seek(0)
+
+            img = Image.open(buf)
+            self._mel_photo = ImageTk.PhotoImage(img)
+            self.mel_display_label.config(image=self._mel_photo)
+        except Exception as e:
+            self._log(f"Failed to render mel display: {e}", "WARNING")
+
     def _schedule_display_clear(self):
         if hasattr(self, '_clear_timer') and self._clear_timer is not None:
             self.root.after_cancel(self._clear_timer)
@@ -1615,6 +1703,8 @@ Label | Times Predicted | % of All Predictions
     def _auto_clear_display(self):
         self.current_key_label.config(text="-", bg='#ecf0f1')
         self.confidence_label.config(text="Confidence: -")
+        self.mel_display_label.config(image='')
+        self._mel_photo = None
         for i in range(5):
             self.prediction_labels[i]['key'].config(text="-")
             self.prediction_labels[i]['conf'].config(text="0.00%")
@@ -1639,6 +1729,8 @@ Label | Times Predicted | % of All Predictions
     def _clear_results(self):
         self.current_key_label.config(text="-")
         self.confidence_label.config(text="Confidence: -")
+        self.mel_display_label.config(image='')
+        self._mel_photo = None
         self.history_text.delete('1.0', tk.END)
         self.keystroke_count = 0
         self.detection_history = []
@@ -1651,6 +1743,26 @@ Label | Times Predicted | % of All Predictions
             self._log(f"Debug files will be saved to: {self.debug_dir}")
         else:
             self._log("Debug file saving disabled")
+
+    def _clear_debug_output(self):
+        if not self.debug_dir.exists():
+            self._log("Debug output folder does not exist")
+            return
+        files = list(self.debug_dir.iterdir())
+        if not files:
+            self._log("Debug output folder is already empty")
+            return
+        if not messagebox.askyesno("Confirm", f"Delete {len(files)} file(s) from {self.debug_dir}?"):
+            return
+        deleted = 0
+        for f in files:
+            try:
+                if f.is_file():
+                    f.unlink()
+                    deleted += 1
+            except Exception as e:
+                self._log(f"Failed to delete {f.name}: {e}", "WARNING")
+        self._log(f"Cleared {deleted} file(s) from debug output folder")
 
     def _update_threshold(self, value):
         threshold = float(value)
