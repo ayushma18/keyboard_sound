@@ -1,0 +1,1542 @@
+H EY A LEXA WHAT DID I JUST TYPE ?
+
+arXiv:2012.00687v1 [cs.CR] 1 Dec 2020
+
+D ECODING SMARTPHONE SOUNDS WITH A VOICE ASSISTANT
+
+Almos Zarandy, Ilia Shumailov and Ross Anderson
+Computer Laboratory
+University of Cambridge
+name.surname@cl.cam.ac.uk
+
+December 2, 2020
+
+A BSTRACT
+Voice assistants are now ubiquitous and listen in on our everyday lives. Ever since they became
+commercially available, privacy advocates worried that the data they collect can be abused: might
+private conversations be extracted by third parties? In this paper we show that privacy threats go
+beyond spoken conversations and include sensitive data typed on nearby smartphones. Using two
+different smartphones and a tablet we demonstrate that the attacker can extract PIN codes and text
+messages from recordings collected by a voice assistant located up to half a meter away. This shows
+that remote keyboard-inference attacks are not limited to physical keyboards but extend to virtual
+keyboards too. As our homes become full of always-on microphones, we need to work through the
+implications.
+
+1
+
+Introduction
+
+Voice assistants like the Amazon Echo and Google Home are now common household devices. They come with
+multiple microphones that are always on. They appear to wake only when their activation command is spoken, but
+they process all the audio they hear, in order to perform wake-up or keyword detection. For example, Amazon Alexa
+responds to ‘Alexa‘, whereas Google home responds to ‘Hey Google‘. To improve user experience it is imperative to
+minimise both false positive and false negative activations. That is turn means that the wake-word detector sends a lot
+of audio data to the server.
+This raises privacy concerns as the microphones often pick up confidential or sensitive personal information. In fact,
+sometimes up to a minute of audio is uploaded to the server without any keywords present [10]. The vendors, Amazon
+and Google, have business models based on collecting and processing user data [12].
+There have been cases of the devices accidentally forwarding sound to the developers or another person’s device [23].
+Furthermore, the devices often run third-party apps, many of which control other household smart devices. As the user
+interface is purely voice-based, third-party apps need to define a voice-only interaction.
+The smart speaker framework processes and parses voice input, which can be passed to the apps. So app developers
+don’t have to design their own voice recognition tools, and for most purposes don’t need to access raw audio input.
+Given data protection concerns, there is a debate about whether apps should be able to access raw audio at all. In the
+smartphone world, apps that need microphone access must get permission from the user, though many users will grant
+any permission an apps asks for. In the smart speaker world this model would not work, as the user might assume that
+every app has a legitimate need for microphone access. There is no general consensus yet, but Amazon and Google
+have devised ways of minimising data exposure to third parties.
+Amazon Alexa does not allow third-party apps (called Alexa Skills) to access sound input, or even the conversation
+transcript. It parses the voice inputs and provides a high-level API to developers for designing conversations. Google
+has a similar system called Home Actions, though it does share the transcript with the third party. Both Amazon and
+
+A PREPRINT - D ECEMBER 2, 2020
+
+USERS HOME
+
+User entering
+banking PIN
+
+Voice assistant
+hears screen taps
+
+ATTACKERS INFRASTRUCTURE
+
+Processing and Storing
+
+Attacker accesses
+recordings
+
+Attacker ﬁnds taps
+in audio
+
+VOICE ASSISTANT
+CLOUD
+
+Attacker converts taps
+to digits or characters
+
+1234
+QWERTY
+
+VOICE ASSISTANT INFRASTRUCTURE
+
+Figure 1: Overall attack flow. User is sitting next to their voice assistant (VA). 1 User enters their banking PIN, when
+VA is active. 2 VA sends recording of user typing to the cloud where it is processed and stored. 3 Attacker finds a
+way to access the audio. 4 Attacker finds tap sounds in audio and extracts them. 5 Finally, attacker converts extracted
+taps into a PIN code.
+
+Google collect and store all voice interactions (including audio), which users can review on their websites. Employees
+and contractors around the world are given access to voice recordings for labelling [9].
+There has been some discussion of smart speakers overhearing conversations. A survey by Lau et al. [14] finds privacy
+concerns were a major factor deterring adoption of smart speakers. Proponents believe that their conversation is not
+interesting enough for anyone listening, despite evidence to the contrary.
+In this paper, we study data that smart speakers capture alongside human conversations – data that users do not expect
+to be heard.
+Physical keyboards emit sound on key presses. It is well known that captured recording of keystrokes can be used to
+reconstruct the text typed on a keyboard. Recent research [20, 18, 13] shows that acoustic side channels can also be
+exploited with virtual keyboards such as phone touchscreens, which despite not having moving parts still generate
+sound. The attack is based on the fact that microphones located close to the screen can hear screen vibrations and use
+them successfully reconstruct the tap location. Such attacks used to assume that the adversary could get access to the
+microphones in the device. We take the attack one step further and relax this assumption.
+In this work we show that attacks on virtual keyboards do not necessarily need to assume access to the device, and can
+actually be performed with external microphones. For example, we show how keytaps performed on a smartphone can
+be reconstructed by nearby smart speakers. The full attack flow is shown in Figure 1.
+Our contributions in the paper are as follows:
+• we show that it is possible to hear virtual keyboard taps with microphones located on nearby devices;
+• we show that it is possible to identify PINs and text typed into a smartphone. Given just 10 guesses, 5-digit
+PINs can be found up to 15 % of the time, and text can be reconstructed with 50 % accuracy;
+• we show that the performance of our early attack is half that achieved with on-device microphones;
+• we discuss potential mitigation techniques.
+
+2
+
+Threat Model
+
+We assume that an attacker has access to microphones on a smart speaker near a target and wants to infer PINs and
+passwords entered on their touchscreen. There are many ways an attacker might gain access, for example,
+• if an attacker installs a malicious skill on a smart speaker and the API allows direct microphone access (not the
+case for Echo and Google Home unless they can jailbreak the device);
+• if an attacker gets a job on speech processing at the company producing the device;
+• if an attacker makes a call to the smart speaker;
+• if an attacker tampers with the smart speaker;
+• if an attacker places one or more hidden microphones physically near to the victim;
+• if an attacker gets access to raw audio logs;
+• if they get a job at the audio processing company.
+2
+
+A PREPRINT - D ECEMBER 2, 2020
+
+We make some further assumptions. First, the phone or tablet is held close to the microphones so that the attacker can
+guess its approximate position and orientation, but it does not have to be absolutely still. Second, the make and model
+of the device are known and the attacker has access to an identical device which to obtain training data. An adversary
+might learn this information by monitoring the victim in various ways. The attacker may give a smart speaker to the
+victim as a present, and use social engineering to make them enter the desired information near its microphones.
+
+3
+
+Related Work
+
+3.1
+
+Acoustic side-channel attacks
+
+Side-channel attacks against keyboards range from observing the user, through the keyboard itself, to attacks on the
+host computer and the network; they are summarised in a systematisation-of-knowledge paper by Monaco [17].
+The first acoustic attacks were described by Asonov and Agrawal [3]. They collected labelled keystroke data from
+a keyboard, extracted Fourier-transform features, and trained a neural network to extract keys. Zhuang et al. [25]
+improved their attack by using cepstrum features and linear classification. They also got rid of the need for a labelled
+dataset, and used a language model for unsupervised training on data captured from the victim. Their attacks required
+access to a microphone near the physical keyboard.
+Cai and Chen were amongst the first to attack virtual keyboards utilising motion sensors [6]). Simon and Anderson
+used the microphone to find when tap events are happening on the screen [21]. Narain et al. [18] used a combination
+of microphones and gyroscopes to infer key presses on a malicious virtual keyboard. Shumailov et al. [20] presented
+an attack that only uses microphones. They used a combination of Time Difference of Arrival (TDoA) and raw input
+classification. Author note that acoustic-only attacks are possible because touchscreens vibrate under finger pressure,
+which microphones in mechanical contact with the screen can hear. Sound waves propagating through the screen
+bounce off edges, creating unique patterns that can be reconstructed.
+Cheng et al. showed that swiping passwords can also be cracked with acoustics [7]. They turn the smartphone into an
+active radar – an inaudible carrier wave is generated using the speakers and is picked up with the microphones. As a
+finger moves across a screen it causes Doppler effect, which can be used to reconstruct the swipe direction.
+These attackers relied on access to the microphone data through a malicious app, active phone call or sensor logs. In this
+work we take a step further and lift this assumption. We show that virtual keyboard inference attacks can be performed
+with outside microphones, which are a lot more realistic. Indeed, it is common to find voice assistants in a home, and
+increasingly people’s homes are full of always-on microphones.
+3.2
+
+Voice assistants and mis-activations
+
+Recent work has highlighted privacy threats from always-on voice assistants. They have been extensively researched
+both in academia [1, 16, 24, 11, 5, 2, 19] and by the media [15]. Dubois et al. [10] analysed misactivations with
+newscasts and TV shows and found 0.95 per hour, lasting for at least 10s. The bottom line is that voice assistants end
+up capturing a lot more information than intended – information that can later be mined for market intelligence. In this
+paper we show that PIN codes and texts entered on a smartphone can often be extracted from such data.
+There have been some suggested defences, but they have not been not widely adopted [8].
+
+Figure 2: Microphone layout on an Amazon Echo and the ReSpeaker 6mic circular array
+
+3
+
+A PREPRINT - D ECEMBER 2, 2020
+
+External microphone
+
+Internal microphone
+
+Figure 3: Waveform and spectrogram of a tap on a smartphone screen recorded by the smartphone itself (bottom) and
+the nearby microphone array (top)
+
+4
+
+Background
+
+The Amazon Echo has seven MEMS (Micro Electrical-Mechanical System) microphones on its top plane, one in the
+centre and six in a circle on the perimeter, so they can determine the direction of a sound source. By contrast, the
+Google Home only has two microphones.
+As neither the Echo nor the Home give access to raw audio, our experiments used a ReSpeaker circular array with 6
+microphones. This is an extension to the Raspberry Pi designed to allow running Alexa on the Pi, but also provide
+raw audio access with a sampling frequency of 48 kHz. The microphones are spaced equally on a circle of radius
+4.63 cm. Figure 2 shows the microphones on the vertices of the hexagon. The setup is similar to Alexa, except for its
+centre microphone. MEMS microphones are small, cheap, extremely sensitive and easy to hide, making them useful
+for eavesdropping devices. Although the setup is not directly identical to modern voice assistants, it is based on same
+quality of technology and it is sufficiently similar to explore possible attack vectors.
+To localise sound sources in space, a co-ordinate system has to be defined. Our co-ordinate system is centred on
+hexagon with two of the microphones lying on the x-axis. The z-axis is orthogonal to the plane of the array. We use
+polar co-ordinates: the azimuth θ is the angle of the projection of the point to the plane from the x-axis, the elevation ϕ
+is the angle from the z-axis, and the range r is the distance from the origin. In our experiments, the victim device was
+towards the negative direction of the y-axis, so the bottom two microphones were closest to it.
+With a sampling frequency of 48 kHz, it takes about six samples for sound to travel from a microphone to an adjacent
+one on the array.
+Taps in the audio recording, both on the victim device and the external array, can be recognised by a short 1–2 ms
+(50-100 sample) spike with frequencies between 1000–5500 Hz, followed by a longer burst of frequencies in and around
+500 Hz. As these latter frequencies are common in the background noise of a standard room, it is the initial spike that
+best distinguishes taps from noise.
+For example, Figure 3 shows the tap on a PIN code digit recorded by two microphones. The spectrogram with window
+size 128 is shown next to the corresponding raw received signal.
+Taps can be recognised reliably with internal microphones. The sound waves propagate both in solid material i.e. the
+smartphone screen, and in air. Shumailov et al. [20] recovered typing data using the smartphone’s own microphones,
+finding most of the tap information in the initial burst of high-frequency waves propagating through the screen, and
+then using energy thresholding at relevant frequencies to find tap events.
+It is harder to locate and process taps with external microphones. Sound waves have to travel either through air, or if
+a table is holding the device, through multiple solid objects. As more of the energy is dissipated, taps have a lower
+4
+
+A PREPRINT - D ECEMBER 2, 2020
+
+Figure 4: Application running on two devices in PIN and text entry, and in portrait and landscape modes
+Table 1: Statistics of devices used in evaluation
+Vendor
+
+Device Name
+
+Type
+
+Size (mm)
+
+Screen (mm)
+
+Weight (g)
+
+HTC
+HMD Global
+Huawei
+
+Nexus 9
+Nokia 5.1
+Mate20 Pro
+
+Tablet
+Phone
+Phone
+
+228.2 × 153.7 × 8.0
+151.1 × 70.7 × 8.3
+157.8 × 72.3 × 8.6
+
+181 × 136
+124 × 62
+147 × 68
+
+425
+150
+189
+
+signal-to-noise ratio and are harder to detect. With simple energy thresholding, a short spike can still be observed, but
+the threshold has to be set low and the false positive rate will be high. It is still useful to have a set of candidate taps
+which can later be filtered using more refined post-processing methods.
+Many users enable sound or vibration feedback, where the device emits a distinctive audio signal after each tap. These
+patterns are much easier to detect than taps. Shumailov [20] explained how they can be used for tap detection, even if
+the delay between the actual tap and the feedback is variable. In this work we assume a harder threat model where no
+feedback is emitted by the target.
+
+5
+
+Experiment Setup
+
+A Raspberry Pi with a ReSpeaker 6-mic circular array was used to collect data. The Pi was running a simple TCP server
+that could be told to start and stop recording and save the audio to a 6-channel .wav file. A WiFi hotspot was set up on
+the Pi so that participating devices could connect to it.
+The victim devices in our experiments were a HTC Nexus 9 tablet, a Nokia 5.1 smartphone and a Huawei Mate20 Pro
+smartphone, all running Android 7 or above and having at least two microphones1 . Table 1 shows some statistics for
+these devices. Only one device of each type was available; we assumed that if a second identical device were used,
+it could be attacked using training data from the first device. Shumailov et al. found this to be the case for Nexus 5
+phones in earlier work [20].
+The victim device was held next to the array with its screen roughly coplanar with the microphones in the array. It
+was running an app that connected to the Pi and told it to start and stop on the press of a button. At the same time, the
+victim device also started recording audio with 2 microphones, and an inaudible sound sequence was played to enable
+alignment of the two audio recordings. The data collected from the internal microphones are not used in the attack, but
+just to verify the automatic labelling of the dataset, as described in Section 5.2, which will be used to evaluate the attack
+1
+Modern smartphones have multiple microphones for domain-specific purposes. For example, there is usually a microphone next
+to the video camera, which can be sampled from the direction of the object being recorded. Similarly, there is usually a microphone
+at the top, to denoise the microphone at the bottom that is used to collect speech during a phone call.
+
+5
+
+A PREPRINT - D ECEMBER 2, 2020
+
+Figure 5: Experiment session with the Mate20 Pro
+
+performance. The victim device also recorded screen touch events with timestamps. Again, the attack does not use
+these data; they are only collected to verify analysis results.
+The app displayed an image of a keyboard or numeric pad, and, to ensure input randomness, it displayed a 5-digit
+number or a word from an English dictionary when the recording started. Participants were told to type the displayed
+text, but not to worry about making a mistake. Sound and vibration feedback were not enabled. Audio recording was
+stopped and restarted after each word to reduce data loss from overflowing buffers in recording devices.
+5.1
+
+The Data and Ethics
+
+Multiple datasets were recorded using different devices, positioning, holding techniques, and input types (PIN, text,
+etc). Each dataset was recorded for about half an hour, during which 250-500 taps were recorded.
+Originally, the plan was to run a user study to collect data from many participants, and the data collection framework
+was designed to make this convenient and ethical. The devices in the study are provided to the participants and no
+applications have to be installed on the devices of the participants. To make sure the participants did not think they had
+to enter their own PIN, 5-digit PINs were solicited instead of the 4-digit PINs common in banking. The participants
+were advised not to talk during the experiment, as the audio recordings might be published anonymously and recorded
+voice could compromise their anonymity.
+The user study got ethical approval from the university ethics review board. However due to the COVID-19 epidemic,
+we were notified that it was no longer possible to recruit participants and run user studies requiring people to be in the
+same room and use shared equipment. Touchscreens are a possible infection transmission risk, so sharing them was
+not advisable during a pandemic. Thus most of the test data was provided by the researchers and their relatives, three
+participants in total. As a result, this paper should be considered proof-of-concept work; we show that virtual keyboard
+inference attacks are possible with external microphones.2 .
+All data were recorded in a room with realistic noise levels i.e. occasional background noise from people talking and
+walking. We have also added additional typical background noise (podcasts playing close to the microphone array).
+5.2
+
+Attack preparation and automatic labelling
+
+In Section 4, we saw that a set of candidate finger taps can be recognised by looking for short wide-band spikes in the
+spectrogram. Shumailov et al. [20] could find most of the finger taps in internal microphone recordings using energy
+thresholding. Those could then be used to build more sophisticated detection mechanisms. With external microphones,
+that is not possible as the false-positive rates end up dominating. Instead we split the detection into two stages. First,
+2
+
+We have reason to believe that the performance will only improve as more people are involved. As will be discussed later, we
+were careful to cross-validates the performance to make sure that there was no overfitting to data or participants.
+
+6
+
+A PREPRINT - D ECEMBER 2, 2020
+
+we use energy thresholding to find all candidate taps; second, we use timestamping information to sift through the
+candidate taps. Note that the timestamping information is only used in the preparation stage of the attack to minimise
+the number of falsely detected taps.
+The automatic labelling can be verified by comparing the labelling of the recording on the victim device to the labelling
+of the microphone array recording. The labelling on the victim device can be trusted to be correct, since taps there have
+a high signal-to-noise ratio. Given a match, the external recording can be labelled manually without needing an audio
+recording from the victim device.
+We find that between 40–80 % of microphone array recordings can be labelled automatically. Manual inspection of
+cases where automatic labelling failed revealed three main causes.
+• First, often a part of one of the recordings is missing because of an overflowing audio buffer in the recording
+app. In this case the recording cannot be automatically labelled because the tap events don’t correspond to
+time offsets in the audio recording.
+• Second, the recording on one of the devices starts too late and the synchronising sequence is missing. In this
+case, the recording can be labelled automatically, but its success cannot be verified.
+• Finally in some cases automatic labelling fails because the recording is too noisy and the algorithm cannot
+handle this level of noise. In these cases, the labelling of the recording from the victim device can be used for
+the microphone array recording.
+We find all three of the cases to be equally common in practice, making them hard to discriminate automatically. We
+have decided to excluded non-automatically labeled data from further evaluation.
+The automatic labelling method allows us to collect a large set of labelled data with no more manual effort than tapping
+on a screen3 . We have released the experiment code-base to facilitate further experimentation4 .
+5.3
+
+Tap detection
+
+To perform automatic labelling, the timestamps of tap events are required. The attacker does not have access to this, so
+other methods are needed to detect taps in unlabelled data. To this end we train a classifier to filter the candidate taps
+and distinguish actual taps from false positives.
+Fourier features of tap candidates were extracted from the recordings. The features were extracted from an 512 sample
+segment around the taps using 128-sample long Hann windows with a 32 sample delay between the start of successive
+windows. 16 frequency buckets were used, with frequencies up to 12 000 Hz. MFCC features were also extracted from
+the same windows, 20 features each.
+The window size and delay were chosen because this is where the taps are most recognisable in a spectrogram by a
+human eye. They turned out to be the optimal shapes for tap detection.
+Discriminant analysis and convolutional neural networks were tried for classification. In general, linear discriminant
+analysis performed better than quadratic discriminant analysis. This is somewhat surprising as it is completely
+unreasonable that taps and false positives have a similar covariance matrix; however LDA is reportedly flexible at
+bending the assumptions. LDA works best on MFCC features while CNNs work best on Fourier features. Multiple
+CNN configurations with varying kernel sizes and input shapes were tested. We also tried using deeper networks, but
+found that they didn’t perform much better for the task at hand. Tap detection was evaluated using data from one, two,
+and all six microphones to simulate attack scenarios where the attacker has access to different numbers of microphones.
+We further confirmed the results with 10-fold cross validation.
+5.4
+
+Note on time difference of arrival
+
+Shumailov et al. [20] relied heavily on time difference of arrival (TDoA) for their performance. We have evaluated
+a large number of different approaches for TDoA but were not able to find any that gave useful distance estimates,
+regardless of what source-localisation techniques we tried. We did however find that points from different presses of
+the same key were placed near a line that passed through the centre of the array and went in the direction of the key.
+So direction estimation may still be usable, but precision requirements make it hard to use for virtual keyboards. We
+hypothesise that waves passing through materials allowed Shumailov et al. to get more precise measurements.
+3
+
+Interestingly we find that where vibration feedback was enabled, taps can be detected without using any classifier since vibration
+feedback has a similar delay to the tap event.
+4
+https://github.com/zarandya/PartIIIDataProcessing/
+
+7
+
+A PREPRINT - D ECEMBER 2, 2020
+
+5.5
+
+Tap classification
+
+Once a segment of audio is decided to be a tap, we want to determine which key on the keyboard was pressed. In the
+rest of this dissertation, “classification” refers to assigning keys to taps (or tap candidates, assuming they are taps), using
+a CNN or LDA classifier. “Classifier” may refer to a classifier used either for detection or for classification, depending
+on context.
+As with tap detection in Section 5.3, classification was done using linear discriminant analysis on MFCC features and
+neural networks on Fourier features. Instead of two classes, there was now one for each key. Shumailov et al. [20]
+found that LDA with Cepstrum features performed best for internal microphones.
+Again, the most relevant information was contained in a 512 sample segment near the start of the tap, which has the
+spike of high frequencies. Unlike in the previous work, smaller MFCC windows did not perform well here, so a
+1024-sample window was used.
+It should be mentioned that we expect lower accuracy, because we have more classes and fewer training data points.
+However, our data still indicate that it is possible to perform the attack. Here, we report the number of taps classified
+correctly on the first, second and third tries.
+
+6
+
+Evaluation
+
+6.1
+
+Signal strength
+
+External microphone
+Internal microphone
+
+25
+
+Signal-to-Noise Ratio (dB)
+
+20
+
+15
+
+10
+
+5
+
+0
+0
+
+2000
+
+4000
+
+6000
+Frequency (Hz)
+
+8000
+
+10000
+
+12000
+
+Figure 6: Average Signal-to-Noise Ratio (in decibels) of a tap on a Nokia 5.1 when recorded on the phone (green) and
+the microphone array (red) at each frequency. Different lines are different microphones.
+The Signal-to-Noise Ratio of a tap recorded on the internal microphone of a victim device is around 15–20 dB. On
+the external array, the volume is much lower, but the taps and noise do not have the same frequency distribution. As
+a result, the Signal-to-Noise ratio varies by frequency. As seen on Figure 6, the SNR peaks between 2000–3500 Hz
+around 10 dB and is still significant in the 3500–4500 Hz range. Under these ranges, the noise is too high, while above
+them the signal is too low.
+Both signal strength and its frequency distribution depend on which device is used, on the way it is held, and on the way
+it is tapped. As seen on Figure 7, it is better if the device is held on a table or in a different hand than the one doing the
+tapping, as this gives harder impact. Fortunately, these are the most common ways of holding modern touch-screen
+devices. When a device is held in two hands, the signal is better in landscape mode than portrait mode, but it peaks at
+higher frequencies. When held in one hand and tapped with the same hand – as used to be common for older, smaller
+devices – the signal is weak, automatic labelling fails on most data, and classification is only slightly better than random
+guessing.
+8
+
+A PREPRINT - D ECEMBER 2, 2020
+
+On a solid surface,
+tapping with one finger
+In one hand, tapping
+with finger of other
+Held in two hands, landscape,
+tapping with two thumbs
+Cradled two hands, portrait,
+tappung with two thumbs
+In one hand, tapping
+with thumb of same hand
+
+12
+
+Signal-to-Noise Ratio (dB)
+
+10
+
+8
+
+6
+
+4
+
+2
+
+0
+0
+
+2000
+
+4000
+
+6000
+Frequency (Hz)
+
+8000
+
+10000
+
+12000
+
+Figure 7: Dependence of Signal-to-Noise ratio on different ways of holding the Nokia 5.1 device
+
+Inputs
+6@16x17
+
+Feature
+maps
+32@15x15
+
+Convolution
+2x3 kernel
+
+Feature
+maps
+32@7x7
+
+Max-pooling
+Dropout 0.1
+2x2 kernel
+
+Feature
+maps
+64@6x5
+
+Convolution
+2x3 kernel
+
+Hidden
+units
+64
+
+Outputs
+2
+
+Fully
+connected
+Dropout 0.1
+
+Fully
+connected
+
+Figure 8: Best performing convolutional neural network for tap detection
+
+6.2
+
+Tap detection
+
+The precision and recall of the best performing LDA and CNN classifiers for each dataset are shown in Table 2. Recall
+is the proportion of positives found, precision is the proportion of true positives among those marked positive.
+With both LDA and CNNs, tap recognition performs above 75 % in precision and above 80 % in recall. CNNs slightly
+outperform LDA in both metrics.
+When only two microphones are available (in a setup similar to Google Home), recall drops to the 70–75 % range when
+using LDA. CNNs perform much worse with only two microphones, the recall drops to around 65–70 %. Precision
+consistently stays above 80 %.
+With only one microphone, recall is around 65 % for LDA and 55 % for CNNs.
+6.3
+
+Classification of numeric digits
+
+Table 3 shows the proportion of taps correctly classified on the first, second and third guess for each dataset.
+The classification accuracy is the proportion of taps that are correctly classified on the first guess. Taps correctly
+classified on the second or third guesses are also of interest. The accuracy is variable between datasets, but is around or
+9
+
+A PREPRINT - D ECEMBER 2, 2020
+
+Device
+
+holding
+
+distance
+
+orientation
+
+keyboard and entry
+
+Nexus 9 Tablet
+Nexus 9 Tablet
+
+in one hand
+in one hand
+
+20 cm
+20 cm
+
+portrait
+portrait
+
+5-digit PINs
+5-digit PINs
+
+Nokia 5.1 Phone
+Nokia 5.1 Phone
+
+in one hand
+in one hand
+
+15 cm
+15 cm
+
+portrait
+portrait
+
+Mate20 Pro Phone
+Mate20 Pro Phone
+
+in one hand
+in one hand
+
+20 cm
+20 cm
+
+Nexus 5 Tablet
+Nexus 5 Tablet
+
+on a table
+on a table
+
+20 cm
+20 cm
+
+method
+
+precision
+
+recall
+
+MFCC+LDA
+Fourier+CNN
+
+83 %
+85 %
+
+76 %
+77 %
+
+5-digit PINs
+5-digit PINs
+
+MFCC+LDA
+Fourier+CNN
+
+81 %
+87 %
+
+76 %
+80 %
+
+portrait
+portrait
+
+5-digit PINs
+5-digit PINs
+
+MFCC+LDA
+Fourier+CNN
+
+87 %
+91 %
+
+77 %
+82 %
+
+portrait
+portrait
+
+English words
+English words
+
+MFCC+LDA
+Fourier+CNN
+
+93 %
+91 %
+
+77 %
+78 %
+
+Table 2: Tap detection experiments
+Device
+
+holding
+
+distance
+
+orientation
+
+keyboard and entry
+
+accuracy
+
+2nd guess
+
+3rd guess
+
+Nexus 9 Tablet
+Nexus 9 Tablet
+
+in one hand
+in one hand
+
+20 cm
+20 cm
+
+portrait
+portrait
+
+5-digit PINs
+5-digit PINs
+
+MFCC+LDA
+Fourier+CNN
+
+method
+
+41 %
+31 %
+
+61 %
+48 %
+
+73 %
+63 %
+
+Nokia 5.1 Phone
+Nokia 5.1 Phone
+
+in one hand
+in one hand
+
+15 cm
+15 cm
+
+portrait
+portrait
+
+5-digit PINs
+5-digit PINs
+
+MFCC+LDA
+Fourier+CNN
+
+48 %
+37 %
+
+66 %
+57 %
+
+76 %
+69 %
+
+Mate20 Pro Phone
+Mate20 Pro Phone
+
+in one hand
+in one hand
+
+20 cm
+20 cm
+
+portrait
+portrait
+
+5-digit PINs
+5-digit PINs
+
+MFCC+LDA
+Fourier+CNN
+
+37 %
+28 %
+
+54 %
+52 %
+
+66 %
+66 %
+
+Nexus 9 Tablet
+Nexus 9 Tablet
+
+on table
+on table
+
+20 cm
+20 cm
+
+portrait
+portrait
+
+English words
+English words
+
+MFCC+LDA
+Fourier+CNN
+
+47 %
+34 %
+
+61 %
+51 %
+
+68 %
+60 %
+
+Nexus 9 Tablet
+Nexus 9 Tablet
+
+on table
+on table
+
+15 cm
+15 cm
+
+landscape
+landscape
+
+English words
+English words
+
+MFCC+LDA
+Fourier+CNN
+
+41 %
+32 %
+
+51 %
+46 %
+
+59 %
+54 %
+
+Nokia 5.1 Phone
+Nokia 5.1 Phone
+
+in two hands
+in two hands
+
+15 cm
+15 cm
+
+landscape
+landscape
+
+English words
+English words
+
+MFCC+LDA
+Fourier+CNN
+
+42 %
+29 %
+
+55 %
+43 %
+
+61 %
+51 %
+
+Table 3: Tap classification experiments. Accuracy is the proportion of taps correctly classified on first guess
+
+above 30 % for CNNs and 40 % for LDA. In comparison, Shumailov et al. [20] could correctly classify around 64 % of
+digits on the first try using internal microphones5 .
+Classification can also be done with data from two microphones, with slightly worse results. Using LDA, the accuracy
+is between 35–40 % for each dataset, and the second and third guesses are also very close to the 6 mic result. With one
+microphone, the accuracy will be around 32 %. With CNNs, the accuracy is between 25–30 % for two microphones,
+again close to the 6 microphone results. With one microphone, it performs worse, around 15 %.
+6.4
+
+Classification of letters
+
+Letters can be classified in the same way as numeric digits. The same LDA and CNN classifiers work well for them,
+with the same features and configurations, except for the number of output classes (and hence the final CNN layer).
+The test data contains entries of English words. The taps are distributed according to the frequency of letters in English,
+but are classified individually, so as far as the classifier is concerned the distribution of a tap is independent of the
+previous letter. A language model can be used to improve classification.
+Letters are often misclassified as other letters adjacent on the keyboard (see Figure 10). This is similar to the common
+problem with smartphones that the keys are too small and users often tap the wrong one. Autocorrect keyboards are
+used to fix this problem using a dictionary; an attack based on a dictionary is presented in Section 7.3.
+The two most common letters in our test dataset, e and s each amount for 10 % of all characters6 , so the random guesser
+with the best accuracy would only choose these letters. The classifier does reasonably well at separating e and s, even
+though they are adjacent on the keyboard. It does not do well at identifying rate characters which are next to a common
+character. For example, a w is almost always classified as an s or an a. About 30 % of taps can be correctly classified
+using CNNs, and 40 % using LDA.
+5
+
+They also only had 9 classes instead of 10.
+Our test words were drawn from the Unix words file which includes every word once, and we ignored word frequency. The file
+included the plural and third person form of words, so the letter s was overrepresented.
+6
+
+10
+
+A PREPRINT - D ECEMBER 2, 2020
+
+Inputs
+1@102x16
+
+Feature
+maps
+32@99x13
+
+Convolution
+4x4 kernel
+
+Feature
+maps
+32@49x6
+
+Max-pooling
+Dropout 0.1
+2x2 kernel
+
+Feature
+maps
+64@46x3
+
+Hidden
+units
+64
+
+Outputs
+10
+
+Fully
+connected
+Dropout 0.1
+
+Fully
+connected
+
+Convolution
+4x4 kernel
+
+True label
+
+Figure 9: Best performing convolutional neural network for classification
+
+q
+w
+e
+r
+t
+y
+u
+i
+o
+p
+a
+s
+d
+f
+g
+h
+j
+k
+l
+z
+x
+c
+v
+b
+n
+m
+
+0 0 1 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 1 1 0
+0 0 1 1 1 0 1 0 1 0 9 6 0 1 1 0 0 0 2 0 0 0 0 0 1 2
+0 016714 5 3 3 8 1 0 1021 7 0 2 4 0 0 1 0 0 3 0 3 11 0
+0 0 8 82 5 0 6 7 1 0 2 1 7 0 2 3 0 2 1 0 0 7 0 0 11 6
+0 0 1 9 54 0 2 9 3 1 6 2 0 0 8 0 0 1 9 1 0 2 1 1 8 4
+0 0 4 2 2 6 0 2 0 0 4 5 0 0 0 3 0 1 1 1 0 1 1 0 1 0
+0 2 4 3 3 1 8 6 0 1 5 0 2 0 3 4 0 1 2 0 0 1 0 3 7 4
+0 0 6 12 3 1 5 94 9 3 3 4 0 1 3 3 0 2 5 0 0 5 2 3 23 4
+1 1 0 3 5 0 1 1152 1 1 2 1 2 1 2 0 5 11 0 0 2 0 2 8 4
+0 0 2 0 1 0 2 0 5 3 2 3 1 1 3 1 0 0 14 0 0 3 0 0 5 2
+0 1 6 2 4 0 3 9 2 7 93 7 1 1 2 4 0 0 5 1 1 5 0 0 12 2
+0 0 18 2 3 1 1 1 0 2 171381 0 3 3 0 0 1 0 0 1 2 0 8 2
+0 1 10 6 1 2 3 1 1 1 1 1 39 0 2 3 0 0 0 0 0 3 0 2 1 1
+0 1 3 1 4 1 0 1 1 0 0 0 0 4 3 1 0 0 0 0 0 4 0 1 2 1
+0 0 2 3 4 3 2 5 1 2 3 3 0 1 9 3 0 0 3 0 0 2 2 1 8 1
+0 0 3 4 0 1 6 5 1 1 3 0 6 2 3 14 0 0 0 0 0 0 0 4 5 1
+0 0 0 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 1 7 9 1 1 0 0 0 0 0 0 1 1 0 0 1 0 0 2 0
+0 0 3 3 5 0 3 4 15 6 3 4 0 2 7 0 0 0 51 0 0 1 0 2 6 3
+0 0 0 0 0 0 0 0 0 0 0 8 0 0 0 0 0 0 0 0 0 0 0 0 1 0
+0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 0 0
+0 0 1 4 6 1 2 3 2 4 5 0 0 6 5 0 0 0 2 0 0 37 0 0 10 1
+0 0 0 0 3 0 1 0 1 1 0 0 0 0 1 0 0 0 2 0 0 2 0 1 1 0
+0 0 1 2 2 1 3 5 0 1 0 0 1 0 0 8 0 0 0 0 0 0 0 9 6 2
+0 1 5 6 7 2 1031 7 1 8 1 1 1 5 3 0 1 4 0 0 5 0 2 45 4
+0 2 0 1 2 1 2 1111 1 4 0 0 0 0 0 0 2 4 0 0 0 1 1 8 7
+qwe r t y u i o p a s d f g h j k l z x c v b nm
+
+160
+140
+120
+100
+80
+60
+40
+20
+0
+
+Predicted label
+
+Figure 10: Confusion Matrix of classified key presses on the Nokia 5.1 held in two hands in landscape mode.
+
+Phones are often held in two hands when typing text. In this case, classification of letters only works well in landscape
+mode. In portrait mode, the keys are too close to each other, and cradling the device in two hands has a low signal
+strength.
+
+7
+
+Direction-of-arrival estimation
+
+Figure 11 shows histograms of estimated directions of arrival for each letter. The most likely direction bin bears a
+close resemblance to the direction of the character. The variance is large though, and the classes cannot be separated.
+Therefore this information is not sufficient to classify the taps, even in one row of the keyboard. It still provides a
+probability distribution for each key, which may be a useful additional feature in classification.
+In an experiment performed on recordings of words typed in landscape mode, the estimated direction of arrival was
+added as an additional feature to MFCC features and classified using LDA. This slightly improves the classification
+accuracy, but the difference is not significant. Taps misclassified by LDA were already mostly classified as adjacent
+keys, and an inaccurate direction of arrival estimation does not add much to that. Similar results can be achieved by
+adding the time differences of arrival between microphone pairs as LDA features.
+In these experiments, the victim device was held still. If an attacker cannot exactly reproduce the device positioning of
+the victim when recording test data, DoA will not be a useful feature for classification.
+11
+
+A PREPRINT - D ECEMBER 2, 2020
+
+q
+w
+e
+r
+t
+y
+u
+i
+o
+p
+3.0
+
+3.5
+
+4.0
+
+4.5
+
+5.0
+
+5.5
+
+6.0
+
+Figure 11: Histogram of predicted directions (in radians) using TDoA measurements for taps on characters in the top
+row of the keyboard (qwerty...). The blue line shows the true direction towards the middle of the key.
+7.1
+
+Effect of distance
+
+The Signal-to-Noise ratio decreases with distance, as can be seen on Figure 12. 55 cm away from the array, it peaks
+at 2 dB. At this point, the automatic labelling only succeeds on 20 % of samples. This is not sufficient to evaluate
+detection and classification, since much more data will be needed for training the classifiers; it furthermore introduces a
+bias towards the few data points where signal volume is decent despite the distance.
+Instead, we use all data, and where the labelling based on the external microphone fails, fall back to the labelling from
+the recording on the internal microphone. This means there are incorrectly labelled recordings in the training set, due to
+the other two causes of automatic labelling failure described in Section 5.2. Since those are caused by recording errors,
+the proportion of them in the entire dataset can be assumed independent of the distance and results at different distances
+can be compared.
+In one experiment, tap detection and classification were performed independently for each distance. In a second
+experiment, classifiers were trained using data for all distances, and only test data was split by distance. As can be seen
+on Figure 13, both recall and classification accuracy drop rapidly, at 30 cm, under 60 % of taps will be detected, which
+makes the attack hardly feasible at that distance. The second experiment performs better due to more training data, this
+suggests that it is not necessary to know the position of the victim device exactly for gathering data.
+7.2
+
+PIN guessing
+
+In the previous sections, we have seen that both LDA and neural networks can provide reasonable guesses for individual
+taps. However, to reconstruct a whole PIN, all taps have to be detected and classified correctly. With a 5-digit PIN, this
+is almost never the case.
+Often an attacker can only make a limited number of guesses. Studies of side-channel attacks therefors typically report
+what proportion of inputs can be reconstructed in a fixed number of guesses. This enables a security engineer how far
+the entropy of the keyspace is eroded by the side channel under study. In this section, 5-digit PINs are reconstructed
+from candidate taps with classifiers performing detection and classification. The attacker will consider each option as a
+guess, assign them a likelihood, and perform guessing in order of likelihood.
+The LDA classifiers not only return the most likely class for a tap, they also give a probability distribution of classes.
+The probability is derived from Bayes’ theorem and the LDA assumptions. For CNNs, a probability distribution can be
+obtained from the softmax function on the final layer. The likelihood of a guess can be computed by multiplying the
+probabilities obtained from the classifier for each digit.
+Tap detection does not always succeed, but detection classifiers also give probabilities for each candidate that it is a tap.
+The classification step gives conditional probabilities for each class given that it is a tap. To consider multiple candidates,
+the probability that each candidate tap is a tap is also multiplied by the likelihood of that guess. The probability that all
+other candidates are false positives must also be considered.
+12
+
+A PREPRINT - D ECEMBER 2, 2020
+
+15 cm
+25 cm
+35 cm
+45 cm
+55 cm
+
+Signal-to-Noise Ratio (dB)
+
+8
+
+6
+
+4
+
+2
+
+0
+
+0
+
+2000
+
+4000
+
+6000
+Frequency (Hz)
+
+8000
+
+10000
+
+12000
+
+Figure 12: Average Signal-to-Noise ratio of taps on the Nexus 9 Tablet recorded on the microphone array at different
+distances. (Different lines with similar colours are different microphones in the array at that distance)
+
+0.8
+
+Recall
+
+0.6
+CNN, Exp. 1
+CNN, Exp. 2
+LDA, Exp. 1
+LDA, Exp. 2
+
+0.4
+0.2
+0.0
+
+CNN, Exp. 1
+CNN, Exp. 2
+LDA, Exp. 1
+LDA, Exp. 2
+
+Accuracy
+
+0.5
+0.4
+0.3
+0.2
+0.1
+15
+
+25
+
+35
+Distance (cm)
+
+45
+
+55
+
+Figure 13: Effect of distance on recall (top) and classification accuracy of numeric digits (bottom). Exp. 1 is trained
+with data from the same distance. Exp. 2 is trained with data from different distances.
+
+The likelihood of a guess is therefore the product of the the probability that each candidate tap is indeed a tap, the
+probability that everything else is not a tap, and the probability that each tap is a given digit. In practice, logarithmic
+probabilities are used for numerical stability.
+Then the number of inputs at least as likely as the real input is taken as the number of guesses. Note that the guesses
+include not just the PIN but exactly when the keys were pressed, as multiple guesses may correspond to the same PIN.
+The computational complexity of computing every guess is high. However candidates can be sorted so that low
+probability guesses are tested later7 . If choosing a candidate results in no guesses more likely than the truth, later
+candidates do not have to be tried. So only guesses with higher likelihood are computed (and a few extra). If this
+number is still too high, then the algorithm exits prematurely and the side channel analysis is ineffective at improving
+the guessing probability.
+Figure 14 shows effectiveness of guessing 5-digit PIN numbers. Many PINs can be found in a small number of guesses,
+but later the curve flattens and over half of possible PINs cannot be found in 3000 guesses.
+7
+
+p
+
+max c
+
+Candidates have to be sorted in decreasing order by n 1−pin n,i where pn is the probability that it is a tap, and cn,i is the
+probability that it is the class i assigned by the classifier. This is because they contribute pn maxi cn,i to the likelihood of the guess
+if they are chosen, and 1 − pn if another candidate is chosen instead.
+
+13
+
+A PREPRINT - D ECEMBER 2, 2020
+
+1.0
+Nexus 9/CNN
+Nexus 9/LDA
+Nokia 5.1/CNN
+Nokia 5.1/LDA
+Mate20 Pro/CNN
+Mate20 Pro/LDA
+Random Guessing
+
+Proportion of PINs found
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0.0
+100
+
+101
+
+102
+Number of guesses required
+
+103
+
+Figure 14: Proportion of 5-digit PINs classified using LDA and CNN with a limited number of guesses. (Note the
+logarithmic axis)
+
+1.0
+Nexus 9/CNN
+Nexus 9/LDA
+Nokia 5.1/CNN
+Nokia 5.1/LDA
+Mate20 Pro/CNN
+Mate20 Pro/LDA
+Random guessing
+
+Proportion of PINs found
+
+0.8
+
+0.6
+
+0.4
+
+0.2
+
+0.0
+100
+
+101
+
+102
+Number of guesses required
+
+103
+
+Figure 15: Proportion of 5-digit PINs classified using LDA and CNN with a limited number of guesses, with the
+additional assumption that taps can be detected correctly. (Note the logarithmic axis)
+
+In almost all cases when the PIN is found, tap detection correctly finds all taps, and in the remaining cases, all taps are
+among the 6-8 most likely candidates. On the other hand, if not all taps were correctly detected, and the ones that were
+detected did not have a much higher likelihood than false positives, the PIN could not be guessed. Since recall is in the
+75–80 % range, in many recordings not all taps will be found correctly.
+Thus guessing performs better if taps can be detected correctly, and do not have to be detected by classifiers. Here, false
+positive candidates are ignored, and only the probabilities of each digit are used to compute the likelihood. Figure 15
+shows the required number of guesses with this assumption8 .
+A similar guessing attack was performed on internal microphones by Shumailov et al. [20]. Table 4 compares the
+results.
+
+8
+
+It is worth noting that in practice this attack will perform much better, because humans pick a very limited set of PIN-codes and
+passwords [4, 22].
+
+14
+
+A PREPRINT - D ECEMBER 2, 2020
+
+Table 4: Comparison of guessing attack with internal microphone attack by Shumailov et al. [20]. 4-digit PINs are used
+in both attacks, but our attack uses ten digits while they use nine.
+
+10 guesses
+20 guesses
+
+Nexus 5
+CNN LDA
+
+Nokia 5.1
+CNN LDA
+
+Mate20 Pro
+CNN LDA
+
+4%
+9%
+
+15 %
+23 %
+
+19 %
+31 %
+
+14 %
+25 %
+
+25 %
+28 %
+
+26 %
+34 %
+
+Nexus 5 [20]
+internal mics
+
+Simon and Anderson [21]
+mic+camera
+
+72 %
+81 %
+
+61 %
+84 %
+
+1.0
+
+Proportion of words found
+
+0.8
+
+0.6
+
+0.4
+Nexus 9/On Table/Landscape/CNN
+Nexus 9/On Table/Landscape/LDA
+Nexus 9/On Table/Portrait/CNN
+Nexus 9/On Table/Portrait/LDA
+Nokia 5.1/In Two Hands/Landscape/CNN
+Nokia 5.1/In Two Hands/Landscape/LDA
+
+0.2
+
+0.0
+100
+
+101
+
+102
+Number of guesses required
+
+103
+
+Figure 16: Proportion of dictionary words found using LDA and CNN with a limited number of guesses, with the
+additional assumption that taps can be detected correctly. (Note the logarithmic axis)
+
+7.3
+
+Dictionary guessing
+
+Text can also be guessed in a similar way, but the number of guesses required will be higher due to there being more
+characters, variable string length, and other factors. If the entry is drawn from a language, knowledge of the language
+statistics can be used to improve guessing.
+In this attack, a dictionary is used to find the word. For each word in the dictionary, likelihood (as described in the
+previous section) is computed, and the number of words with a better likelihood than the actual word is counted.
+The attack only works well if all taps are correctly detected, which is almost never the case for non-short words. Thus
+instead, the attack was evaluated with skipping the detection step and assuming it was successful, and only performing
+classification on actual taps. With this assumption, the attack works well, many words can be reconstructed in a low
+number of guesses as can be seen on Figure 16. This shows that classification works well even when detection does not,
+and the attack would benefit from an improved method for detection.
+While users were asked to type dictionary words, they often made mistakes. In this attack, their typos were corrected to
+the most similar dictionary word. The attack could find mistyped words where the wrong key was pressed, but could
+not do that in the presence of missing keystrokes.
+7.4
+
+Attacking other users
+
+In the previous sections, the training data always contained data from the same users as the test data. Due to the
+pandemic, data could be collected from only a limited number of different users although in a variety of conditions
+(device, holding, distance, entry).
+On a set of PINs entered on the Mate20 Pro by one user, CNN and LDA classifiers were trained, which were used to
+attack PINs entered on the same device by another used.
+In this experiment, 35 % of taps could be classified correctly using MFCC and LDA on 5 microphones (the sixth
+microphone failed before the experiment). This is slightly worse than the cross-validation results presented in Section 6.3,
+but still good. The second and third guesses also performed well, finding the digit at 53 % and 66 % of taps, which is
+15
+
+A PREPRINT - D ECEMBER 2, 2020
+
+even closer to cross-validation results. The CNN classifier, performed poorer on this dataset, finding the digit only 22 %
+of times.
+Tap detection performed as well as with cross-validation using both CNN as LDA, and results using fewer microphones
+were also similar.
+
+8
+
+Conclusions
+
+In this paper, we have shown that inference attacks against virtual keyboards can work with external microphones.
+While previous work which showed that the microphones in a device can be used to deduce PINs and passwords entered
+on its screen, we have now shown that a smart speaker such as Alexa could in theory snoop on PINs or text entered on a
+nearby phone or tablet. Up to around 40 % of taps can be correctly classified on the first guess for both numerical and
+text keyboards. Linear Discriminant Analysis with MFCC features works best for this, while Convolutional Neural
+Networks with Fourier features are also suitable. The effect would be to greatly reduce the number of PINs or passwords
+that had to be tried in order to unlock a device. This, we argue, is a practical way to measure the information leakage
+through such a side channel.
+The weak point is the problem of tap detection. While a high proportion – about 75–80 % – of taps can be detected, any
+increase in the number of false positives means that the number of PIN guesses increases exponentially. With internal
+microphones, taps could be detected using energy thresholding [20]. With external microphones it is not possible to add
+this kind of artificial mitigation, but the environment provides the false positives.
+When snooping on text entry, around 40 % of English words can be detected using an acoustic dictionary attack.
+However, this attack struggles too without correct tap detection. For our relatively small dictionary, in the worst case
+scenario it would need about ten thousand guesses to find a majority of common words. The complexity grows when
+larger dictionaries are assumed and new heuristics become necessary.
+To mount a more practical attack, the adversary would need a more accurate way to detect taps, such as one based
+on vibration feedback (though this can be countered if vibration feedback is artificially randomised). If detection is
+successful, taps can be classified, even taps that are hard to detect otherwise.
+
+9
+
+Countermeasures
+
+While the attack is still hard to perform due to imperfect detection, mitigations must be discussed.
+In their seminal paper on acoustic side-channel attacks on mechanical keyboards, Asonov and Agrawal [3] proposed
+using a more silent keyboard, such as a touchscreen. In this project, we have seen that touchscreens are also susceptible
+to the attack, and not just by microphones physically mounted on the same device as the target touchscreen.
+Since the principal problem is tap detection, mobile vendors could try injecting false positives into the data stream by
+playing silent tap-like sounds randomly while the keyboard is open, in a way that users can not hear. A significant
+number of false positives will make the guessing attack infeasible.
+The attack relies on the attacker having access to an identical device. Many users use phone cases or screen protectors
+to protect their phone from mechanical damage; these can also alter tap acoustics and may provide some measure of
+protection against acoustic side-channel snooping.
+Regarding smart speakers, this shows that Amazon and Google were prudent in not allowing third-party skills to access
+access raw audio recordings. However, Apple and Google are not the only firms selling consumer electronic devices
+that contain MEMS microphones and support third-party apps that may be untrustworthy.
+
+10
+
+Future directions
+
+This work is the first to demonstrate an acoustic attack on touchscreens using external microphones. It is still a
+proof-of-concept attack; its significance is to show that the possibility of a side channel that previous researchers had
+disregarded or even dismissed.
+The largest problem is discriminating between actual taps on the target screen and other quiet sounds in the room. More
+sophisticated acoustic approaches to tap detection might improve significantly on our results. In particular applications,
+other methods that do not rely on the intrinsic acoustic signatures of taps must be considered, such as vibration feedback
+or even components that are not purely acoustic. For example, a nearby software radio might be used to listen for
+Tempest signals generated by the target device when processing tap inputs.
+16
+
+A PREPRINT - D ECEMBER 2, 2020
+
+Our work was hindered by the coronavirus pandemic which limited the number of test users. Cross-user attacks must
+be verified with more users at some later time, to see whether the attack can be improved by a training set containing
+data from more users. Hopefully the classifiers could learn more device-specific and user-agnostic filters, which may be
+more useful for attacking a user not in the training set. One might also discover classifiers that work across devices. We
+might also improve the attack by just collecting more data; in our experiments, the attack kept improving as more data
+was added.
+Countermeasures should also be tested. One could try to emit false positives from a microphone, test whether the
+classifiers can tell them apart from real taps, and evolve better false positive taps. The distorting effects of phone cases
+should also be tested, and whether the attacker can overcome them by training with multiple cases.
+
+17
+
+A PREPRINT - D ECEMBER 2, 2020
+
+References
+[1] N. Abdi, K. M. Ramokapane, and J. M. Such. More than smart speakers: security and privacy perceptions of smart home
+personal assistants. In Fifteenth Symposium on Usable Privacy and Security ({SOUPS} 2019), 2019. 3
+[2] T. Ammari, J. Kaye, J. Y. Tsai, and F. Bentley. Music, search, and iot: How people (really) use voice assistants. ACM
+Transactions on Computer-Human Interaction (TOCHI), 26(3):1–28, 2019. 3
+[3] D. Asonov and R. Agrawal. Keyboard acoustic emanations. IEEE Symposium on Security and Privacy, 2004. Proceedings.
+2004, pages 3–11, 2004. 3, 16
+[4] J. Bonneau. The science of guessing: Analyzing an anonymized corpus of 70 million passwords. In 2012 IEEE Symposium on
+Security and Privacy, pages 538–552, 2012. 14
+[5] J. Bugeja, A. Jacobsson, and P. Davidsson. On privacy and security challenges in smart connected homes. In 2016 European
+Intelligence and Security Informatics Conference (EISIC), pages 172–175. IEEE, 2016. 3
+[6] L. Cai and H. Chen. Touchlogger: Inferring keystrokes on touch screen from smartphone motion. In HotSec, 2011. 3
+[7] P. Cheng, I. E. Bagci, U. Roedig, and J. Yan. Sonarsnoop: Active acoustic side-channel attacks. International Journal of
+Information Security, pages 1–16, 2019. 3
+[8] P. Cheng, I. E. Bagci, J. Yan, and U. Roedig. Towards reactive acoustic jamming for personal voice assistants. In Proceedings
+of the 2nd International Workshop on Multimedia Privacy and Security, MPS ’18, page 12–17, New York, NY, USA, 2018.
+Association for Computing Machinery. 3
+[9] M. Day, G. Turner, and N. Drozdiak. Amazon workers are listening to what you tell Alexa. Bloomberg, 2019. 2
+[10] D. J. Dubois, R. Kolcun, A. M. Mandalari, M. T. Paracha, D. Choffnes, and H. Haddadi. When speakers are all ears:
+Characterizing misactivations of iot smart speakers. Proceedings on Privacy Enhancing Technologies, 2020(4):255–276, 2020.
+1, 3
+[11] J. S. Edu, J. M. Such, and G. Suarez-Tangil. Smart home personal assistants: a security and privacy review. arXiv preprint
+arXiv:1903.05593, 2019. 3
+[12] L. Kelion. Why Amazon knows so much about you. BBC News, 2020. 1
+[13] H. Kim, B. Joe, and Y. Liu. Tapsnoop: Leveraging tap sounds to infer tapstrokes on touchscreen devices. IEEE Access,
+8:14737–14748, 2020. 2
+[14] J. Lau, B. Zimmerman, and F. Schaub. Alexa, are you listening?: Privacy perceptions, concerns and privacy-seeking behaviors
+with smart speakers. PACMHCI, 2:102:1–102:31, 2018. 2
+[15] D. Lynskey. ’alexa, are you invading my privacy?’ – the dark side of our voice assistants. https://tinyurl.com/
+y5velcwz, 2019. 3
+[16] N. Malkin, S. Egelman, and D. Wagner. Privacy controls for always-listening devices. In Proceedings of the New Security
+Paradigms Workshop, pages 78–91, 2019. 3
+[17] J. V. Monaco. SoK: Keylogging side channels. 2018 IEEE Symposium on Security and Privacy (SP), pages 211–228, 2018. 3
+[18] S. Narain, A. Sanatinia, and G. Noubir. Single-stroke language-agnostic keylogging using stereo-microphones and domain
+specific machine learning. In WiSec ’14, 2014. 2, 3
+[19] L. Schönherr, M. Golla, T. Eisenhofer, J. Wiele, D. Kolossa, and T. Holz. Unacceptable, where is my privacy? exploring
+accidental triggers of smart speakers. arXiv preprint arXiv:2008.00508, 2020. 3
+[20] I. Shumailov, L. Simon, J. Yan, and R. Anderson. Hearing your touch: A new acoustic side channel on smartphones. ArXiv,
+abs/1903.11137, 2019. 2, 3, 4, 5, 6, 7, 8, 10, 14, 15, 16
+[21] L. Simon and R. Anderson. Pin skimmer: Inferring pins through the camera and microphone. In Proceedings of the Third ACM
+Workshop on Security and Privacy in Smartphones & Mobile Devices, SPSM ’13, page 67–78, New York, NY, USA, 2013.
+Association for Computing Machinery. 3, 15
+[22] D. Wang, Q. Gu, X. Huang, and P. Wang. Understanding human-chosen pins: characteristics, distribution and security. In
+Proceedings of the 2017 ACM on Asia Conference on Computer and Communications Security, pages 372–385, 2017. 14
+[23] S. Wolfson. Amazon’s Alexa recorded private conversation and sent it to random contact. The Guardian, 2018. 1
+[24] E. Zeng, S. Mare, and F. Roesner. End user security and privacy concerns with smart homes. In Thirteenth Symposium on
+Usable Privacy and Security ({SOUPS} 2017), pages 65–80, 2017. 3
+[25] L. Zhuang, F. Zhou, and J. D. Tygar. Keyboard acoustic emanations revisited. ACM Trans. Inf. Syst. Secur., 13:3:1–3:26, 2005.
+3
+
+18
+
+

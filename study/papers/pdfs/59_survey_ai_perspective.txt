@@ -1,0 +1,2366 @@
+Review
+
+A Survey on Acoustic Side-Channel Attacks: An Artificial
+Intelligence Perspective
+Benjamin Quattrone 1, *
+
+and Youakim Badr 2
+1
+2
+
+*
+
+School of Engineering Design and Innovation, Pennsylvania State University, University Park, PA 16802, USA
+Engineering Division, Pennsylvania State University, Malvern, PA 19350, USA; yzb61@psu.edu
+Correspondence: brq5019@psu.edu
+
+Abstract
+Acoustic Side-Channel Attacks (ASCAs) exploit the sound produced by keyboards and
+other devices to infer sensitive information without breaching software or network defenses. Recent advances in deep learning, large language models, and signal processing
+have greatly expanded the feasibility and accuracy of these attacks. To clarify the evolving
+threat landscape, this survey systematically reviews ASCA research published between
+January 2020 and February 2025. We categorize modern ASCA methods into three levels
+of text reconstruction—individual keystrokes, short text (words/phrases), and long-text
+regeneration— and analyze the signal processing, machine learning, and language-model
+decoding techniques that enable them. We also evaluate how environmental factors such as
+microphone placement, ambient noise, and keyboard design influence attack performance,
+and we examine the challenges of generalizing laboratory-trained models to real-world
+settings. This survey makes three primary contributions: (1) it provides the first structured
+taxonomy of ASCAs based on text generation granularity and decoding methodology;
+(2) it synthesizes cross-study evidence on environmental and hardware factors that fundamentally shape ASCA performance; and (3) it consolidates emerging countermeasures,
+including Generative Adversarial Network-based noise masking, cryptographic defenses,
+and environmental mitigation, while identifying open research gaps and future threats
+posed by voice-enabled IoT and prospective quantum side-channels. Together, these insights underscore the need for interdisciplinary, multi-layered defenses against rapidly
+advancing ASCA techniques.
+Keywords: acoustic side-channel attacks; keyboard snooping; keystroke analysis;
+signal processing
+
+1. Introduction
+Academic Editor: Tao Zhang
+Received: 4 October 2025
+Revised: 29 November 2025
+Accepted: 5 December 2025
+Published: 29 December 2025
+Copyright: © 2025 by the authors.
+Licensee MDPI, Basel, Switzerland.
+This article is an open access article
+distributed under the terms and
+conditions of the Creative Commons
+Attribution (CC BY) license.
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+Between 2019 and 2023, the number of remote work jobs increased threefold, driven
+mostly by the COVID-19 pandemic [1,2]. Given the steady state of remote jobs postCOVID-19, securing personal and work data in public places is just as relevant now as
+ever. Remote job opportunities could exist at five times the rate prior to the pandemic [3].
+Wi-Fi and network traffic snooping should be a common concern amongst nomadic users
+of free Internet who could be subjected to sophisticated attacks such as Acoustic SideChannel Attacks (ASCAs).
+A side-channel attack is any method of unauthorized access of a person’s key presses
+on a keyboard through some type of recording device [4]. Adding to that scenario, an
+acoustic side-channel attack makes use of the audible emanations of a keyboard to passively
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+2 of 29
+
+listen to the device to convert those keystrokes into complete words without any actual
+knowledge of what key is being pressed [5]. These attacks pose serious risks to users
+because cryptographic hardware struggles to prevent passive and non-invasive attempts,
+such as ASCAs [6]. Figure 1 visualizes some of the additional fields of side-channel attacks
+(SCAs) and how they compare to acoustic attacks.
+
+Figure 1. Variations of Side-Channel Attacks.
+
+Acoustic Side-Channel Attacks have clearly established themselves as a viable and
+potent threat to information security. A unified framework is currently lacking to classify
+the diverse attack modalities, evaluate countermeasures, and identify threats from emerging
+solutions. Therefore, a systematic survey is critically needed to synthesize these scattered
+contributions, establish a coherent taxonomy, and provide a clear research roadmap to
+deal with an evolving threat landscape. To this end, this survey thoroughly explores the
+latest achievements in the field of acoustic side-channel attacks, recent artificial intelligence
+advances, and signal processing techniques.
+1.1. Problem Statement
+In the last decade, significant advancements in deep learning and generative artificial intelligence have emerged, presenting opportunities to develop new attack vectors
+in the field of ASCAs and, therefore, new challenges to thwart those attack vectors [7].
+Notably, the development of multimodal large language models (MLLMs) have enabled
+the integration of diverse data types, including audio, text, and visual inputs, facilitating
+more sophisticated analyses of acoustic emissions from keyboards [8]. These advancements
+have led to the development of sophisticated ASCAs that utilize smartphone microphones
+to accurately classify keystrokes. For instance, Harrison et al. (2023) implemented deep
+learning models in a laboratory setting, achieving a 95% accuracy rate in classifying laptop
+keystrokes recorded via a nearby smartphone’s integrated microphone [7]. Adversarial
+machine learning techniques have also been explored to defend against machine learningbased side-channel attacks. Nam et al. (2023) proposed a defensive machine learning
+method, employing adversarial obfuscation to protect against side-channel attacks by
+obfuscating side-channel signals [9]. Similarly, Yan et al. (2023) introduced AIAShield, a
+defense strategy leveraging adversarial attacks to safeguard AI accelerators from powerbased side-channel attacks [10]. These representative works underscore the dynamic nature
+of the acoustic side-channel attack field and suggest that a new systematic literature review
+is warranted to capture and assess the implications of these technological advancements
+on ASCAs.
+1.2. Contributions
+This systematic literature review provides a comprehensive and updated analysis of
+acoustic side-channel attacks, with a particular focus on text reconstruction from keyboards.
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+3 of 29
+
+Since the last major systematic literature review on ASCAs in September 2023 [11,12],
+significant advancements in artificial intelligence and deep learning have reshaped the
+field, necessitating a new synthesis of research. This review captures developments from
+2020 to 2025, including the rise of multimodal AI models, self-supervised learning, and
+adversarial defenses, all of which have had a profound impact on ASCA methodologies
+and countermeasures. Although the systematic search was restricted to studies published
+between January 2020 and February 2025, earlier foundational works are referenced in the
+findings are strictly for contextual background and historical framing. These older papers
+were not part of the screened or evaluated corpus.
+Beyond theoretical evaluations, this review also assesses the real-world feasibility of
+ASCAs by considering practical attack models. It examines hardware improvements, such
+as the enhanced sensitivity of smartphone microphones, and evaluates the robustness of
+attacks against environmental noise and human factors. These insights provide valuable
+perspectives for both cybersecurity professionals and AI researchers, guiding future work
+on developing stronger countermeasures and mitigation strategies. Through this updated
+synthesis, this study bridges the gap between theoretical research and real-world applicability, offering a holistic understanding of how ASCAs have evolved and where they are
+headed in the coming years.
+
+2. Background and Concepts
+2.1. Overview of Side-Channel Attacks
+Side-channel attacks (SCAs) exploit unintended information leakage from physical
+systems rather than targeting cryptographic algorithms directly. These attacks capitalize on
+the physical properties of computing devices to infer data [13]. SCAs can be categorized
+based on the type of emanation they leverage:
+
+•
+•
+•
+•
+
+Electromagnetic SCAs—Utilize electromagnetic emissions from electronic circuits to
+extract encryption keys or reconstruct processed data.
+Power SCAs—Analyze variations in power consumption to deduce secret operations,
+often used in cryptographic attacks (e.g., differential power analysis).
+Timing SCAs—Measure execution time variations in software or hardware to infer
+cryptographic operations.
+Acoustic SCAs—Exploit sound emissions from keyboards, processors, or other components to reconstruct information such as typed keystrokes or encryption processes.
+
+Acoustic side-channel attacks (ASCAs), a subset of SCAs, leverage audio signals to
+analyze system behavior, particularly keystroke sounds for text reconstruction, making
+them highly relevant in remote work environments where traditional security measures
+may not account for such threats [14].
+Historical Context
+The field of SCAs has evolved over decades, with several groundbreaking discoveries
+laying the foundation for acoustic-based attacks.
+Power and Timing Attacks on Cryptographic Systems (1990s–2000s)
+In 1996, Paul C. Kocher introduced the concept of timing attacks, demonstrating that
+by carefully measuring the time required to perform private key operations, attackers could
+potentially recover secret keys from cryptographic algorithms such as Diffie-Hellman, RSA,
+and DSS. This revelation highlighted that execution time variations could be exploited to
+deduce sensitive information [15].
+Building upon this, in 1999, Kocher, along with Joshua Jaffe and Benjamin Jun, presented Differential Power Analysis (DPA). They illustrated that by analyzing power con-
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+4 of 29
+
+sumption patterns during cryptographic operations, attackers could extract secret keys,
+thereby demonstrating that power fluctuations could leak cryptographic information. This
+work significantly influenced subsequent research on non-intrusive SCAs [16].
+Early Acoustic Side-Channel Attacks (2004–2010)
+In 2004, Dmitri Asonov and Rakesh Agrawal conducted a study revealing that different keys on a keyboard produce distinctive acoustic signatures. By analyzing these
+sound patterns, they demonstrated the feasibility of keystroke recognition through acoustic
+emissions, introducing a novel attack vector in the realm of SCAs [17].
+The same year, researchers further discovered that acoustic emissions from computer
+CPUs during cryptographic operations could be exploited. By listening to the sounds
+produced by a computer’s processor, they were able to infer RSA secret keys, underscoring
+the potential of acoustic side-channel attacks to compromise cryptographic security [18].
+Advancements in Machine Learning for SCAs (2010s–Present)
+The 2010s witnessed significant advancements in machine learning, which researchers
+leveraged to enhance the effectiveness of SCAs. In 2018, Martin et al. introduced a deep
+learning-based approach to keystroke inference attacks, achieving notable accuracy in
+classifying keystrokes based on acoustic data. Their study demonstrated the practicality
+of using convolutional neural networks (CNNs) to process spectrogram representations
+of keystroke sounds, thereby making acoustic side-channel attacks more feasible in realworld scenarios [19].
+Building upon this foundation, in 2023, Harrison et al. presented a practical implementation of a state-of-the-art deep learning model to classify laptop keystrokes using a
+smartphone’s integrated microphone. Their classifier achieved an accuracy of 95% when
+trained on keystrokes recorded by a nearby phone and 93% accuracy with recordings from
+video-conferencing software like Zoom. This research highlighted the increased accessibility and effectiveness of such attacks, emphasizing the evolving threat landscape posed
+by SCAs [7].
+These historical developments illustrate how SCAs transitioned from theoretical vulnerabilities to real-world threats, ultimately leading to the emergence of acoustic-based
+keystroke inference as a serious cybersecurity concern.
+2.2. Acoustic Side-Channels
+2.2.1. Basic Principles of Acoustic Side-Channels
+Acoustic side-channel attacks (ASCAs) exploit sound waves produced by various
+electronic devices to extract sensitive information. These attacks leverage the principle
+that physical operations generate unique acoustic signatures, which can be captured,
+analyzed, and mapped to specific actions or data. Figure 2 shows an example of how this
+is accomplished.
+One prominent method is keystroke analysis, where different keyboard keys produce
+distinct acoustic signatures due to variations in key size, switch mechanisms, and impact
+sounds. By capturing and classifying these sounds, an attacker can reconstruct typed text.
+For instance, a study demonstrated that machine learning algorithms could be trained to
+identify keystrokes based on their acoustic emissions [20].
+Another technique involves microphone-based eavesdropping. Modern microphones,
+including those in smartphones, laptops, and smart speakers, can detect subtle acoustic
+variations even from a distance. AI-driven filtering techniques enhance recognition accuracy. Research has shown that deep learning models can classify laptop keystrokes with
+high accuracy using a smartphone’s integrated microphone [7]. Ref. [18] was also able to
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+5 of 29
+
+use a parabolic microphone to capture an RSA key from the targeted device at the end of a
+table that was four meters away.
+
+Figure 2. Acoustic Side-Channel Attacks Illustration.
+
+Sound propagation and reflection also play a role in ASCAs. Acoustic waves travel
+through air and surfaces, sometimes revealing secondary information about hardware
+operations, such as CPU processing sounds or printer movements. An example is the use
+of active acoustic side-channel attacks, where speakers emit inaudible acoustic signals, and
+the echoes are recorded via microphones to infer information about user interactions [21].
+Recent advancements in machine learning and signal processing have drastically
+improved the ability to classify sound patterns, making ASCAs more precise and scalable
+than traditional statistical methods. Studies have demonstrated the effectiveness of deep
+learning models in accurately interpreting acoustic data for side-channel attacks [7].
+These developments underscore the evolving nature of ASCAs and the importance of
+understanding their mechanisms to develop effective countermeasures.
+2.2.2. Typical Hardware Exploitations
+Acoustic side-channel attacks can target a wide range of hardware devices that emit
+characteristic sounds during their operations. Keyboards, both mechanical and membrane
+types, generate distinct keystroke sounds due to their unique construction and switch mechanisms. These sounds can be captured and analyzed to reconstruct typed text. Similarly,
+smartphones and smart assistants, equipped with built-in microphones, can be exploited
+to eavesdrop on keystrokes and device activities. For instance, the study “Hearing your
+touch: A new acoustic side channel on smartphones” demonstrated that the microphones
+in smartphones and tablets can capture the sound waves generated by taps on the screen,
+allowing attackers to recover what users type on virtual keyboards [22].
+Printers and scanners are other targets for ASCAs. The mechanical movements involved in printing or scanning produce unique acoustic signatures, which, if captured,
+could potentially reveal the contents of printed text or scanned documents [23]. Even hard
+drives and CPUs can emit subtle sound emissions during cryptographic operations, such
+as minor variations in CPU cooling fan speed or hard drive actuator movement, which
+could leak sensitive information [18].
+Additionally, wearable devices, such as smartwatches and fitness trackers, may inadvertently capture acoustic signals from their surroundings, potentially aiding side-channel
+attacks by providing data that complements other captured signals [21]. Furthermore,
+software-based vulnerabilities arise when applications unintentionally allow unauthorized
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+6 of 29
+
+microphone access, which amplifies the risks of ASCAs in environments such as remote
+work, corporate offices, and secure facilities [8].
+2.2.3. Typical Software Exploitations
+Acoustic side-channel attacks can expose various cryptographic and software vulnerabilities by exploiting unintended sound emissions from devices. For instance, during
+cryptographic operations, the processing noise generated by CPUs can be analyzed to infer
+private keys. A notable example is the extraction of 4096-bit RSA decryption keys from
+laptops by capturing the acoustic emissions produced during decryption [18].
+Attackers can also perform audio-based keylogging by analyzing the acoustic properties of keystrokes to infer typed passwords, PINs, and passphrases. Research has demonstrated that different keys produce distinct sounds, allowing for the reconstruction of
+typed information [17].
+Furthermore, ASCAs can be combined with adversarial AI techniques to manipulate
+or replay audio, potentially bypassing voice-based authentication systems. This approach
+highlights the evolving sophistication of attacks targeting biometric security measures [24].
+Mobile devices are also susceptible, as smartphone microphones can capture acoustic
+variations caused by screen taps, unlocking gestures, and notification sounds, potentially
+revealing user activity. The “SonarSnoop” attack exemplifies this, where speakers emit
+inaudible acoustic signals, and the echoes are recorded via microphones to infer user
+interactions, such as unlock patterns [25].
+These vulnerabilities underscore the growing threat posed by ASCAs, especially as
+advancements in AI and deep learning enhance attack efficiency. It is crucial to explore
+countermeasures and mitigation strategies to address these evolving risks.
+2.3. Related Work
+The most recent systematic literature review on acoustic side-channel attacks is titled “A Survey on Acoustic Side Channel Attacks on Keyboards”, authored by Alireza
+Taheritajar, Zahra Mahmoudpour Harris, and Reza Rahaeimehr. This survey, published on
+20 September 2023, provides a comprehensive examination of the susceptibility of mechanical keyboards to acoustic side-channel attacks. It delves into the feasibility of such attacks,
+explores various threat models, and discusses methodologies employed to execute and enhance these attacks. The paper emphasizes the increasing vulnerability of keyboard-based
+input systems, especially with advancements in microphone technology [22].
+Additionally, another pertinent work is “SoK: Acoustic Side Channels” authored by
+Ping Wang, Shishir Nagaraja, Aurélien Bourquard, Haichang Gao, and Jeff Yan, published
+on 6 August 2023. This study offers a state-of-the-art analysis of acoustic side channels,
+encompassing significant academic research in the area, discussing security implications,
+countermeasures, and identifying avenues for future research. Notably, it attempts to bridge
+the fields of side channels and inverse problems, highlighting their deep connections [23].
+
+3. Systematic Review Methodology
+Conducting a systematic literature review is a critical step in understanding the current
+state of research on acoustic side-channel attacks. Unlike traditional narrative reviews,
+which provide a broad discussion of a topic, an SLR follows a structured, transparent, and
+replicable methodology to ensure a comprehensive and unbiased assessment of existing
+literature. By systematically identifying, selecting, and synthesizing relevant studies, an
+SLR helps map out key findings, highlight research gaps, and establish a solid foundation
+for future work.
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+7 of 29
+
+Ensuring rigorous inclusion and exclusion criteria allows the study to provide reliable
+insights for both academic researchers and industry practitioners seeking to mitigate ASCArelated security risks or how to create new versions of the attack for research purposes.
+When executed properly, a SLR minimizes bias in the search, identification, and analysis
+stages, leading to findings that can inform cybersecurity strategies and drive innovation in
+defense mechanisms against ASCAs.
+This systematic literature review follows the PSALSAR (Protocol, Search, Appraisal,
+Synthesis, Analysis, and Reporting) framework to provide a structured and transparent
+methodology for evaluating acoustic side-channel attacks. The PSALSAR framework
+ensures that each stage of the review is conducted rigorously and systematically. This
+approach enhances the reproducibility and reliability of the findings, making them valuable
+for both academic research and practical security applications.
+This SLR applies the PSALSAR methodology to provide a comprehensive examination
+of ASCAs, including their effectiveness at different text granularity levels, the primary
+machine learning techniques used in their execution, environmental factors influencing
+their success, and existing mitigation strategies. The structured nature of PSALSAR ensures
+that the review captures key advancements while identifying trends and gaps in the
+literature, offering actionable insights for researchers and cybersecurity practitioners alike.
+3.1. Research Questions
+As acoustic side-channel attacks continue to evolve alongside advancements in artificial intelligence and machine learning, it is crucial to systematically investigate their
+effectiveness, methodologies, and countermeasures. The steady-state of remote work environments reinforces that ASCAs are a pressing security concern. This study aims to explore
+ASCAs across multiple dimensions, including their ability to reconstruct text at different
+granularities, the techniques used to execute these attacks, and the environmental factors
+that impact their success. Additionally, this review will assess the current landscape of
+countermeasures designed to mitigate ASCA threats and examine emerging trends and
+research gaps driven by recent developments in AI and signal processing. The following
+research questions in Table 1 serve as the foundation for this systematic literature review,
+guiding an in-depth analysis of the state-of-the-art in ASCAs.
+Table 1. ASCA Systematic Literature Review Research Questions.
+Category
+
+Research Question
+
+Effectiveness of ASCAs Across Text Granularity
+
+RQ1: How effective are acoustic side-channel attacks (ASCAs) in
+reconstructing typed inputs at different levels of text granularity
+(individual letters, short text, and large text)?
+
+Techniques and Performance Comparisons
+
+RQ2: What are the primary analysis techniques (e.g., statistical machine
+learning, deep learning, geometric-based, or cipher-text analysis)
+employed in ASCAs, and how do their performances compare?
+Additionally, what are the success rates and limitations of each analysis
+technique within their respective categories?
+
+Environmental and Contextual Factors
+
+RQ3: How do environmental factors, ambient noise, microphone
+placement, keyboard type, and room acoustics impact the effectiveness of
+ASCAs across different machine learning techniques?
+
+Countermeasures and Mitigation
+
+RQ4: What active (encryption, noise injection, adversarial training)
+and passive (hardware shielding, microphone design) countermeasures
+exist for ASCAs, and how effective are they against ML-driven attacks?
+
+Trends and Gaps in the Literature
+
+RQ5: What are the major trends in ASCA research from 2020 to the
+present, and what emerging gaps exist due to recent AI advancements
+(e.g., self-supervised learning, transformer-based signal process)?
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+8 of 29
+
+3.2. Search Strategy and Screening Process
+The search strategy for this SLR on ASCAs follows a structured approach to identifying
+relevant research across multiple academic databases. IEEE Xplore, ACM Digital Library,
+Scopus, Springer, and arXiv were selected for this SLR on ASCAs based on their relevance,
+coverage, and indexing of high-quality research in cybersecurity, machine learning, and
+side-channel analysis. The exact search terms used per each academic database are indicated
+in Appendix A.
+
+•
+
+•
+
+•
+
+•
+
+•
+
+IEEE Xplore—Selected because it houses leading cybersecurity and signal processing
+research, including key conferences (e.g., IEEE Symposium on Security and Privacy)
+and journals on machine learning, acoustics, and side-channel attacks.
+ACM Digital Library—Included due to its strong repository of computer security,
+cryptography, and human–computer interaction research, which are critical for understanding keystroke dynamics and attack methodologies.
+Scopus—Used for its extensive indexing of peer-reviewed articles, advanced filtering
+capabilities, and citation analysis tools, ensuring the inclusion of high-impact studies
+in cybersecurity, signal processing, and adversarial AI.
+Springer—Selected for its collection of high-quality journals and conference proceedings in cybersecurity, cryptography, and artificial intelligence. Springer provides
+strong coverage of theoretical and applied research, particularly in side-channel analysis and acoustic attacks.
+arXiv—Included as a leading preprint repository that offers early access to cutting-edge
+research in cybersecurity, machine learning, and signal processing. Many influential
+papers on ASCAs, adversarial AI, and deep learning-based attacks first appear on
+arXiv before formal peer review.
+
+These databases collectively ensure comprehensive coverage of ASCAs across various
+disciplines, including cybersecurity, acoustics, and artificial intelligence. This reduces
+publication bias and improves the reliability of the review.
+Screening Process
+To ensure a rigorous and comprehensive selection of studies, we employed a multistage screening process designed to progressively refine the pool of relevant literature while
+maintaining specificity. This process followed four main phases: Identification, Screening,
+Eligibility, and Final Selection.
+In the Identification phase, broad keyword searches were conducted to capture the
+full lexical and conceptual diversity of research addressing ASCAs within cybersecurity.
+Because the terminology used to describe ASCAs has evolved inconsistently across disciplines, spanning computer security, signal processing, and human–computer interaction, it
+was necessary to include multiple synonymous or overlapping expressions. The core search
+terms (“keystroke inference,” “acoustic cryptanalysis,” “keyboard acoustics,” and “typed
+input”) were chosen to encompass both the attack mechanism (e.g., inferring keystrokes
+or extracting sensitive data from audio emissions) and the signal domain (e.g., acoustic or
+audio-based analysis). Complementary terms such as “signals intelligence” and “acoustic
+analysis” were incorporated to account for literature originating from adjacent domains,
+including information assurance, hardware security, and surveillance studies, where similar
+techniques may be discussed under different nomenclature. Applying these keywords
+across titles, abstracts, keywords, and full texts ensured comprehensive retrieval of relevant
+works regardless of the terminology adopted by individual authors or publication venues.
+Appendix A elaborates on the specifics of the exact terms that were searched per database,
+per Research Question.
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+9 of 29
+
+The Screening phase involved removing duplicate and incomplete records, such as
+entries containing only abstracts or tables of contents, using reference management tools.
+Additionally, studies that primarily focused on non-acoustic side-channel attacks, such
+as power analysis or electromagnetic emissions, were excluded to maintain the focus
+on ASCAs.
+In the Final Selection phase, a comprehensive full-text review assessed each article’s
+methodological depth, validity of results, and direct relevance to ASCA research. This
+involved evaluating performance metrics, experimental frameworks, and contributions to
+advancing ASCA countermeasures and defenses. Articles that lacked methodological rigor,
+failed to meet selection criteria, or did not provide substantial insights into our research
+questions were excluded at this stage.
+By implementing this structured, multi-phase approach, we ensured that the final
+set of studies offered a high standard of quality and direct relevance, forming a robust
+foundation for our systematic literature review. Figure 3 below details the way in which the
+total number of papers per database was discovered and, ultimately, how it was reduced to
+the proper scope based on the factors that this research study intends to address.
+
+Figure 3. Selection criteria for ASCA-related papers.
+
+3.3. Selection Criteria
+3.3.1. Inclusion Criteria
+The inclusion criteria ensure that this systematic literature review considers only highquality, relevant research. Studies must be published in English, as this is the dominant
+language for cybersecurity and side-channel attack research. This ensures accessibility and
+consistency in analysis. Research must explicitly focus on acoustic side-channel attacks or
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+10 of 29
+
+provide methodologies applicable to this domain, such as machine learning-based signal
+processing, cryptographic vulnerability assessments, or adversarial mitigation techniques.
+Additionally, priority is given to peer-reviewed articles, conference proceedings, and
+high-impact journals from reputable academic databases, including IEEE Xplore, ACM
+Digital Library, Scopus, Springer, and arXiv. This ensures that the included studies meet
+rigorous academic standards. Research published in top-tier cybersecurity conferences or
+in journals related to machine learning, adversarial AI, and acoustic signal processing is
+particularly relevant.
+3.3.2. Exclusion Criteria
+Duplicate studies identified across multiple databases were removed, with preference
+given to the most complete, peer-reviewed, and recently updated version of each work.
+Research that was only tangentially related to ASCAs was excluded, including studies
+on side-channel attacks that did not involve acoustic methods. Terms such as “power
+analysis” and “electromagnetic emissions” were explicitly excluded, as these attacks do
+not utilize acoustic signals and therefore fall outside the scope of this review. Incomplete
+or insufficiently detailed studies, such as abstracts without full-text availability, preprints
+lacking clear methodology sections, or papers that provided no empirical or conceptual
+contribution to acoustic-based inference, were also filtered out during screening. These exclusion measures ensured that only high-quality, methodologically relevant ASCA research
+was retained for full analysis.
+3.4. Quality Assessment
+3.4.1. Assessment Rubric and Criteria
+A quality assessment rubric is essential for evaluating the rigor, validity, and reliability
+of the included studies. The Critical Appraisal Skills Programme (CASP) checklist was
+utilized as an evaluation framework. Table 2 outlines what will be included in the final
+evaluation per research paper.
+Based on these factors, each study is scored on a numerical scale (e.g., 1–5) or categorized as high, medium, or low quality. This rubric is applied to each paper in Table 3.
+3.4.2. Summarizing the Quality Assessment
+The quality assessment results are summarized in a table format. Each study is rated
+based on its methodological rigor and relevance to ASCAs. Studies that score low on
+reproducibility or lack empirical validation may be categorized separately or excluded
+from further synthesis.
+A bar chart will also be used to display the distribution of quality ratings across
+different studies, highlighting key trends such as the predominance of deep learning-based
+approaches or the lack of real-world ASCA implementation capabilities.
+3.5. Data Extraction and Synthesis
+3.5.1. Extracted Data Points
+For each included study, key data points are systematically extracted into a structured
+table, including:
+1.
+2.
+3.
+4.
+5.
+6.
+
+Publication details (authors, year, venue)
+Targeted devices (e.g., mechanical keyboards, smartphone microphones, CPUs)
+Methodologies used (e.g., deep learning, statistical analysis, geometric modeling)
+Performance metrics (e.g., accuracy, false positive rate, signal-to-noise ratio)
+Real-world viability (e.g., lab-only, limited applicability, highly viable)
+Recording method (e.g., smartphone, directional mic, parabolic mic)
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+11 of 29
+
+7.
+
+Recording distance (e.g., short-range, mid-range, long-range)
+
+In addition to the sections above, we also include the grading rubric that was discussed
+in Section 5 for Assessment Rubric and Criteria:
+1.
+2.
+3.
+4.
+5.
+
+Study design
+Reproducibility
+Validity of results
+Applicability to ASCAs
+Impact and Citations
+
+This structured dataset allows for a comparative analysis of different methodologies
+and their effectiveness in ASCAs.
+Table 2. Quality Assessment Rubric.
+Criteria
+
+Description
+
+Scoring Scale (1 to 5)
+
+Study Design
+
+Evaluates whether the study is based on empirical
+experiments or theoretical analysis. Empirical studies
+with real-world data are preferred. Scores of 2–4 indicate
+partial empirical validation—e.g., simulations or
+small-scale user studies without full
+real-world deployment.
+
+1—Theoretical with minimal validation;
+5—Strong empirical study with
+real-world validation.
+
+Reproducibility
+
+Assesses the availability of datasets, clarity in
+methodology, and whether the study is reproducible by
+other researchers. Scores of 2–4 reflect partial
+reproducibility, such as when limited dataset access or
+incomplete method details are provided.
+
+1—No dataset or methodology details;
+5—Fully reproducible with open datasets
+and clear methodology.
+
+Validity of Results
+
+Examines the robustness of evaluation metrics, statistical
+significance, and whether results are well-supported.
+Scores of 2–4 rep- resent studies that report some metrics
+or comparisons but lack formal significance tests
+or full benchmarks.
+
+1—No validation or weak metrics;
+5—Strong statistical validation and
+comprehensive evaluation.
+
+Applicability to ASCAs
+
+Determines whether the study is applicable to real-world
+ASCA scenarios, considering feasibility and scalability.
+Scores of 2–4 capture studies that show conceptual
+feasibility or partial scalability, but not
+deployment-level realism.
+
+1—Limited to lab settings, not scalable;
+5—Highly feasible for realworld application.
+
+Impact and Citations
+
+Measures the study’s influence based on citation count,
+publication venue, and impact within the research
+community. Scores of 2–4 represent papers that are
+moderately cited or published in respected but
+non-top-tier venues.
+
+1—Low citation count, unpublished or
+weak venue; 5—Highly cited in a
+reputable journal/conference.
+
+3.5.2. Synthesis Approach
+This systematic literature review employs a thematic synthesis technique. This approach allows for a structured exploration of recurring themes in ASCAs and provides a
+data-driven comparison of the effectiveness of various attack methodologies.
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+12 of 29
+
+Table 3. Classification system of research found within this SLR.
+
+Title of Article
+
+Source of
+Leakage
+
+Real-World
+Viability
+
+Recording
+Method
+
+Recording
+Distance
+
+Analytical
+Approach
+
+Study
+Design
+(1–5)
+
+Reproducibility
+(1–5)
+
+Validity of
+Results (1–5)
+
+Applied to
+ASCAs (1–5)
+
+Impact &
+Citations
+(1–5)
+
+A Practical Deep Learning-Based Acoustic Side
+Channel Attack on Keyboards
+
+Physical
+keyboard
+
+Lab-only
+
+Smartphone mic
+
+Short-range
+
+Deep Learning
+
+5
+
+5
+
+5
+
+5
+
+4
+
+Understanding Analog Side Channels Using
+Cryptographic Algorithms
+
+Cryptographic
+algorithms
+
+Limited
+
+EM emissions
+
+N/A
+
+Cryptographic
+Analysis
+
+3
+
+2
+
+2
+
+2
+
+2
+
+LidarPhone Acoustic Eavesdropping using a
+Lidar Sensor
+
+Lidar reflections
+
+Experimental
+
+Lidar sensor
+
+Mid-range
+
+Signal
+Processing
+
+4
+
+3
+
+4
+
+4
+
+3
+
+Acoustic Side Channel Attack on Keyboards
+Based on Typing Patterns
+
+Physical
+keyboard
+
+Limited
+
+Directional mic
+
+Short-range
+
+Machine
+Learning
+
+3
+
+3
+
+3
+
+3
+
+3
+
+Industrial
+side-channels
+
+Unknown
+
+Industrial
+sensors
+
+Short-range
+
+Side-Channel
+Analysis
+
+3
+
+3
+
+3
+
+3
+
+2
+
+A New Deep Learning Pipeline for Acoustic
+Attack on Keyboards
+
+Physical
+keyboard
+
+Lab-only
+
+Directional mic
+
+Short-range
+
+Deep Learning
+
+5
+
+5
+
+5
+
+5
+
+5
+
+Auditory Eyesight: Demystifying PS-keystroke
+Tracking Attacks on Unconstrained
+Keyboard Inputs
+
+Physical
+keyboard
+
+Theoretical
+
+Microphone
+arrays
+
+Short-range
+
+Deep Learning
+
+2
+
+1
+
+2
+
+1
+
+1
+
+Acoustic Side Channel Attack for Keystroke
+Splitting in the Wild
+
+Physical
+keyboard
+
+Feasible
+
+Directional mic
+
+Short-range
+
+Deep Learning
+
+5
+
+5
+
+5
+
+5
+
+5
+
+Acoustic
+emissions from
+3D printers
+
+Varied
+
+Lab acoustic
+sensors
+
+Short-range
+
+Statistical ML
+
+4
+
+4
+
+4
+
+4
+
+3
+
+Acoustic Side Channel Attack for Keystroke
+Splitting in the Wild
+
+Physical
+keyboard
+
+Feasible
+
+Directional mic
+
+Short-range
+
+Deep Learning
+
+5
+
+5
+
+5
+
+5
+
+5
+
+Your PIN Sounds Good! Augmentation of PIN
+Guessing Strategies via Audio Leakage
+
+Physical
+keyboard
+
+Feasible
+
+Parabolic mic
+
+Mid-range
+
+Statistical ML
+
+4
+
+4
+
+4
+
+4
+
+3
+
+UltraPIN Inferring PIN Entries via Ultrasound
+
+Physical
+keyboard
+
+Highly
+Feasible
+
+Ultrasound mic
+
+Mid-range
+
+Machine
+Learning
+
+4
+
+4
+
+4
+
+4
+
+4
+
+WE-CAN: Acoustic Side Channel Attack for
+Keystroke Splitting
+
+Physical
+keyboard
+
+Moderate
+
+Directional mic
+
+Short-range
+
+Statistical ML
+
+4
+
+3
+
+4
+
+4
+
+3
+
+Machine-learning-based adaptive keyboard
+sound masking against acoustic channel attacks
+
+Physical
+keyboard
+
+Moderate
+
+GAN noise
+injection
+
+N/A
+
+GAN-based
+
+3
+
+3
+
+3
+
+3
+
+2
+
+Digital Twin Security via Side-Channels
+
+Security Threats in AM
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+13 of 29
+
+Table 3. Cont.
+
+Title of Article
+
+Source of
+Leakage
+
+Real-World
+Viability
+
+Recording
+Method
+
+Recording
+Distance
+
+Analytical
+Approach
+
+Study
+Design
+(1–5)
+
+Reproducibility
+(1–5)
+
+Validity of
+Results (1–5)
+
+Applied to
+ASCAs (1–5)
+
+Impact &
+Citations
+(1–5)
+
+Keyboard Acoustic Side Channel Attacks on
+Android Phones in the AI Era
+
+Android
+microphone
+
+Moderate
+
+Smartphone mic
+
+Short-range
+
+Machine
+Learning
+
+4
+
+3
+
+3
+
+3
+
+3
+
+GAZwpilot Remote Keystroke Inference Attack
+by Gaze Estimation from Avatar Views in VR
+MR Devices
+
+Eye-tracking &
+gaze data
+
+Experimental
+
+VR headset
+sensor
+
+Short-range
+
+Geometricbased
+
+3
+
+2
+
+3
+
+2
+
+2
+
+A Prototype for Generating Random Key
+Sounds to Prevent Keyboard Acoustic
+Side-Channel Attacks
+
+Keystroke
+sound synthesis
+
+Limited
+
+Synthetic
+sounds
+
+N/A
+
+Noise
+-based Countermeasure
+
+2
+
+2
+
+2
+
+2
+
+2
+
+A New Pipeline for Snooping Keystroke Based
+on Deep Learning
+
+Physical
+keyboard
+
+Highly
+Feasible
+
+Smartphone mic
+
+Mid-range
+
+Deep Learning
+
+5
+
+5
+
+5
+
+5
+
+5
+
+A Survey on Acoustic Side Channel Attacks
+on Keyboards
+
+Multiple input
+sources
+
+Varied
+
+Multiple sensors
+
+Varied
+
+Survey-based
+
+3
+
+3
+
+3
+
+3
+
+3
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+14 of 29
+
+Thematic Analysis for Qualitative Insights
+Thematic coding is used to identify recurring patterns in the reviewed literature,
+categorizing studies based on:
+1.
+2.
+
+3.
+4.
+
+Attack Strategies—Classification of ASCAs based on the exploited acoustic emissions
+(e.g., keystroke inference, CPU cryptographic leakage, printer acoustic signatures).
+Defensive Measures—Grouping mitigation techniques, such as noise injection, adversarial machine learning, and hardware shielding, to assess common approaches and
+their effectiveness.
+Targeted Devices—Examining the diversity of hardware exploited in ASCAs, including mechanical keyboards, smartphone microphones, CPUs, and IoT devices.
+Environmental Constraints—Analyzing how factors like ambient noise, microphone
+placement, and room acoustics impact the accuracy and practicality of attacks.
+
+By structuring the data into these categories, thematic analysis helps highlight key
+trends, common vulnerabilities, and research gaps in ASCAs.
+
+4. Acoustic Side-Channel Attacks
+4.1. Descriptive Statistics
+Various computational methods play a crucial role in understanding, detecting, and
+mitigating ASCAs. Machine Learning and Deep Learning offer data-driven approaches to
+pattern recognition within side-channel traces, while Statistical Machine Learning provides
+probabilistic models for assessing vulnerabilities. Additionally, Cipher-Text Analysis
+focuses on identifying cryptographic weaknesses, whereas Geometric Analysis aids in
+visualizing and interpreting complex data structures inherent to side-channel leakage.
+Table 4 below summarizes these computational methods, highlighting their definitions, key
+techniques, applications, and interrelationships. These terms have been defined in the table
+to aid in the understanding of how all research papers were analyzed.
+Table 4. Definitions of Computational Methods Used in Research.
+Computation
+Method
+
+Definition
+
+Key Techniques
+
+Applications
+
+Relationship to Others
+
+Machine
+Learning (ML)
+
+A broad field of algorithms
+that learn from data to
+make predictions
+or decisions.
+
+Supervised learning,
+unsupervised learning,
+reinforcement learning
+
+Image recognition,
+NLP, fraud detection
+
+Encompasses both
+Deep Learning and
+Statistical ML
+
+Deep
+Learning (DL)
+
+A subset of ML that uses
+multi-layered neural
+networks to model
+complex patterns.
+
+CNNs, RNNs,
+Transformers, GANs
+
+Autonomous vehicles,
+speech recognition,
+generative AI
+
+A subset of ML, but
+different from
+Statistical ML
+
+Statistical ML
+
+ML approaches rooted in
+probability, statistics, and
+formal inference.
+
+Bayesian models, logistic
+regression, hidden
+Markov models
+
+Predictive modeling,
+risk assessment,
+bioinformatics
+
+Overlaps with ML but
+distinct from DL
+
+Cipher-Text
+Analysis
+
+The study of encrypted text
+patterns to infer
+information about
+encryption schemes.
+
+Frequency analysis,
+cryptanalysis, statistical
+pattern recognition
+
+Cybersecurity,
+cryptography,
+data privacy
+
+Uses statistical
+techniques; may
+leverage ML for
+decryption strategies
+
+Geometric
+Analysis
+
+The mathematical study of
+shapes, spaces, and
+transformations, often
+applied to ML.
+
+Manifold learning,
+topological data analysis,
+dimensionality reduction
+
+Image processing, 3D
+modeling, physics
+simulations
+
+Provides mathematical
+foundations for ML
+and Statistical ML
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+15 of 29
+
+To complement the qualitative synthesis of ASCA methodologies, Table 5 quantitatively summarizes how many studies fall into each analytical category and reconstruction
+level. Because ASCAs differ substantially in methodological sophistication and targeted
+output, ranging from single-character inference to full-sentence reconstruction, this distributional view helps illustrate the maturity and direction of current research. The table
+reveals clear patterns, such as the dominance of deep learning approaches and the relative scarcity of sentence-level models, providing empirical support for the research gaps
+later discussed. This descriptive snapshot helps frame the field’s breadth and guides
+readers toward understanding which techniques are most frequently explored within the
+2020–2025 literature.
+Table 5. Summarization of analysis techniques and their category of research.
+
+Analysis Technique
+
+Letters
+
+Words
+
+Sentences
+
+Machine Learning
+Deep Learning
+Geometric
+Cipher-Text
+
+3
+5
+2
+1
+
+4
+6
+1
+0
+
+2
+3
+1
+0
+
+4.2. Technological and Methodical Trends
+The studies analyzed in this systematic literature review reveal consistent patterns
+in both hardware and software exploited in ASCAs. In terms of hardware, laptops and
+desktops are among the most commonly targeted devices. Several studies focus on capturing keystroke acoustic signatures from laptop keyboards using smartphone microphones
+or online conferencing software. For example, A Practical Deep Learning-Based Acoustic
+Side Channel Attack on Keyboards demonstrates how a smartphone microphone can capture and classify keystrokes with 95% accuracy [7], while A New Deep Learning Pipeline
+for Acoustic Attack on Keyboards uses Temporal Convolutional Networks (TCNs) to extract keystroke data with high precision [19]. Similarly, Acoustic Side Channel Attack
+for Keystroke Splitting in the Wild emphasizes the importance of smart segmentation
+techniques to classify keystrokes effectively [26].
+Beyond traditional computing devices, mobile and IoT devices present dual
+vulnerabilities—both as attack vectors and targets. Smartphones, for instance, can be
+exploited for microphone-based eavesdropping, where inaudible ultrasound signals capture PIN entries with a 75% success rate [27]. Additionally, Keyboard Acoustic Side Channel
+Attacks on Android Phones in the AI Era of Digital Banking highlights how side-channel
+attacks can extract PINs and passwords from Android devices [28]. Meanwhile, IoT devices
+such as robot vacuum cleaners have been repurposed for eavesdropping, as demonstrated
+in LidarPhone Acoustic Eavesdropping Using a Lidar Sensor, where lidar reflections from
+household objects were used to reconstruct speech with up to 91% accuracy [29]. This
+underscores how seemingly benign smart devices can become powerful surveillance tools.
+Industrial and cyber-physical systems (CPSs) are also vulnerable to ASCAs, particularly in additive manufacturing (AM) environments. Security Threats in AM discusses
+how acoustic emissions from 3D printers and CNC machines can reveal proprietary design
+details, leading to risks such as design theft, sabotage, and illegal part manufacturing [30].
+These findings highlight the growing risk of intellectual property theft and industrial
+espionage through non-traditional attack vectors.
+From a software perspective, several studies expose vulnerabilities in operating systems and application security. Many attacks exploit weak sensor permission policies in
+mobile OS environments, allowing unauthorized apps to access microphones, gyroscopes,
+or lidar sensors for eavesdropping. Keyboard Acoustic Side Channel Attacks on Android
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+16 of 29
+
+Phones in the AI Era of Digital Banking leverages Android-based permissions to capture keystrokes [31], while LidarPhone Acoustic Eavesdropping Using a Lidar Sensor
+demonstrates how embedded lidar sensors in smart devices can be manipulated to capture
+sound vibrations [29]. These findings suggest that default security policies in mobile OS
+environments are inadequate in preventing acoustic side-channel attacks.
+Moreover, remote attacks through cloud-based services pose a growing threat, particularly through video conferencing platforms. Studies such as A Practical Deep LearningBased Acoustic Side Channel Attack on Keyboards and A New Pipeline for Snooping
+Keystroke Based on Deep Learning Algorithm show how keystroke inference attacks can
+be performed using Zoom recordings, achieving classification accuracies of over 93% [7,31].
+These findings suggest that cloud-based services unintentionally broaden the attack surface
+by capturing and storing audio that can be leveraged for keystroke inference.
+Overall, several key patterns emerge from these findings. Laptops and mobile devices are the primary targets of ASCAs, with keyboard acoustic emissions being the most
+frequently exploited vulnerability. Unexpected attack vectors, such as IoT devices and
+industrial systems, present new security risks, particularly in manufacturing and smart
+home environments. Additionally, smartphones play a dual role by acting as an attack tool
+(via microphones) while also being a target for PIN inference attacks. Weak OS permission
+policies, particularly in Android environments, further exacerbate these risks. Cloud-based
+applications, especially video conferencing software, introduce new remote attack vectors,
+allowing adversaries to capture keystroke sounds without direct access to the target device.
+Lastly, industrial espionage via acoustic emissions is an emerging concern, particularly in
+additive manufacturing and cyber-physical systems. These findings underscore the urgent
+need for enhanced security measures, including hardware-based defenses, randomized
+keystroke sounds, and stricter sensor access controls, to mitigate the growing risks of
+acoustic side-channel attacks.
+4.3. Attack Outcomes and Severity
+ASCAs can be classified based on their impact on security objectives. For instance,
+attacks that reconstruct keystroke signals or PIN entries primarily compromise confidentiality and privacy by exposing sensitive data. Notable case studies include the PinDrop
+attack, which demonstrated that acoustic emanations from ATM PIN pads can be exploited
+to recover up to 96% of 4-digit and 94% of 5-digit PINs at close range [32], and the UltraPIN
+attack that infers PIN entries from inaudible ultrasound signals on smartphones [27]. In
+contrast, attacks targeting the operational data of systems, such as those exploiting acoustic
+emissions from 3D printers, pose a threat to integrity by potentially enabling design theft
+or unauthorized modifications of product specifications. For example, Security Threats
+in AM reports cases of design theft via the acoustic emanations of a 3D printer and sabotage of a quadcopter by targeting its 3D-printed propeller, illustrating vulnerabilities in
+additive manufacturing systems, although real-world exploitation in this area remains
+largely experimental [30].
+Additionally, while availability is less commonly the direct target of ASCAs, disruptions to hardware behavior (for example, by sabotaging a 3D-printed propeller) illustrate
+how such attacks can indirectly affect system availability. Previous research on additive
+manufacturing security has demonstrated how attackers can introduce selective defects in
+design files, compromising the structural integrity of printed components, including critical
+aerospace and automotive parts [30]. These case studies underscore the multifaceted risks
+of ASCAs and highlight the urgent need for comprehensive security measures that address
+confidentiality, integrity, availability, and privacy simultaneously.
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+17 of 29
+
+4.4. Acoustic Channels vs. Other Side Channels
+Acoustic side-channel attacks vary widely in their approaches, and comparing their
+effectiveness, feasibility, and stealth reveals distinct trade-offs that depend on the target environment and the attacker’s operational constraints. Some methods, such as the
+PinDrop attack, focus on high accuracy in PIN reconstruction, whereas others, like UltraPIN, prioritize stealth by exploiting inaudible ultrasound signals. Deep learning-based
+keystroke recognition pipelines further push the boundaries of accuracy but at the expense
+of increased complexity and dependence on extensive training data.
+The PinDrop attack exemplifies a highly effective method when conducted at close
+range. In controlled experiments, PinDrop was shown to recover up to 96% of 4-digit PINs
+and 94% of 5-digit PINs when the recording device was positioned 0.3 m from the target.
+However, its effectiveness decreases significantly with distance—recovering only 57% of
+4-digit and 39% of 5-digit PINs at 2 m [32]. This method’s feasibility is largely contingent on
+the attacker being in close proximity and operating in a relatively noise-free environment,
+which, while achievable in some settings, limits its applicability in more variable realworld scenarios.
+In contrast, the UltraPIN attack leverages inaudible ultrasound signals to capture
+keystroke data from a distance ranging between 50 and 100 cm [27]. Although UltraPIN
+achieves a somewhat lower success rate of around 75% in recovering PIN entries, it offers a
+significant advantage in terms of stealth. The inaudibility of ultrasound ensures that the
+attack remains covert, minimizing the chance of detection by the victim. This trade-off
+between lower effectiveness and higher stealth can be particularly attractive in scenarios
+where remaining undetected is critical.
+Deep learning-based approaches have significantly advanced the accuracy of acoustic
+side-channel attacks, particularly with the adoption of Temporal Convolutional Networks
+(TCNs). In [31], TCNs were utilized to model long-range dependencies in keystroke
+acoustic emissions, achieving a peak accuracy of 98.3% under controlled conditions. This
+study highlights the capability of TCNs in keystroke recognition but also notes challenges
+related to dataset quality, environmental noise, and real-world variability. Similarly, ref. [7]
+demonstrated the effectiveness of deep learning for keystroke classification, reaching
+95% accuracy when using recordings from nearby smartphone microphones and 93%
+accuracy with Zoom-based recordings. This underscores the feasibility of deep learningdriven ASCAs even in remote attack scenarios. Additionally, ref. [26] applied TCNs
+for keystroke classification and segmentation, showcasing high precision in recognizing
+individual keystrokes despite environmental noise. These studies collectively demonstrate
+the potential of TCN-based ASCAs while also highlighting their reliance on well-labeled
+datasets and the need for robust preprocessing techniques to mitigate real-world challenges.
+Overall, while PinDrop excels in scenarios requiring high accuracy at very close
+distances, UltraPIN provides enhanced stealth through the use of inaudible signals, and
+deep learning pipelines offer superior accuracy under ideal conditions, each method comes
+with its own set of limitations. The choice of ASCA method ultimately depends on the
+specific priorities of the attacker—whether effectiveness, feasibility, or stealth is most
+critical in the given context. Future research must address these trade-offs by developing
+methods that can generalize better to real-world conditions and by proposing robust
+countermeasures to mitigate these emerging threats.
+4.5. Current Mitigation Approaches
+In our systematic review of 19 papers, countermeasures against ASCAs can be classified into four broad categories: hardware-based, software-based, cryptographic, and
+environmental defenses. Our summarization table reveals that most researchers have
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+18 of 29
+
+focused on software-based solutions, with some studies proposing complementary defense
+layers, while dedicated hardware modifications are notably absent, likely due to higher
+costs and retrofit challenges.
+Hardware-based countermeasures aim to reduce acoustic emissions at the source by
+redesigning keyboards or integrating sound-dampening materials. However, none of the
+reviewed studies propose a dedicated hardware modification as a primary ASCA defense.
+This absence suggests that while physical redesigns could offer robust protection, their
+practical deployment remains difficult—especially in legacy systems where retrofitting
+new hardware is costly and logistically challenging. As a result, researchers have primarily
+explored software-based defenses, which are more flexible and scalable.
+Software-based countermeasures are among the most widely explored defenses
+against ASCAs. For example, Lobanova et al. [33] propose a generative adversarial network
+(GAN)-based defense mechanism that generates false keystroke sounds, effectively masking real keystroke emissions. Their study demonstrates that GAN-based noise injection
+significantly reduces attack success rates while maintaining usability, making it a promising
+defense strategy.
+Meanwhile, deep learning pipelines, such as those described in Harrison et al [7]
+and Spata et al. [31], focus on classifying keystroke signals rather than masking them. In
+particular, Spata et al. [31] employ deep learning techniques, achieving 98.3% accuracy
+under controlled conditions. However, these approaches require large labeled training
+datasets and are highly sensitive to environmental variations, posing challenges for realworld deployment. While keystroke classification methods have been widely studied,
+research on keystroke masking, such as the GAN-based approach from Lobanova et al. [33],
+has gained traction as a way to obscure keystroke sounds and hinder ASCA effectiveness.
+Cryptographic-based countermeasures focus on securing keystroke data rather than
+preventing acoustic leakage. Several studies propose using randomized keypads or dynamic challenge-response protocols to make any intercepted keystroke emissions useless to
+an attacker. For instance, Yampolskiy and Gatlin [30] discuss randomized keypads, while
+Taheritajar and Rahaeimehr [11] explore secure input mechanisms to mitigate ASCA risks.
+However, none of the reviewed studies provide empirical validation of these cryptographic
+defenses in ASCA scenarios. Most cryptographic approaches are theoretical or borrowed
+from other domains, such as authentication security, and may not be practical for free-text
+typing environments.
+Environmental-based countermeasures involve modifying the surrounding conditions to reduce the signal-to-noise ratio (SNR) of keystroke emissions, making attacks more
+difficult to execute. Several studies highlight that adding background noise or synthetic
+masking sounds can reduce ASCA effectiveness [23,26]. However, these defenses are
+generally supplementary—they do not eliminate the attack vector but instead make it less
+practical to exploit.
+For example, Cheng et al. [21] demonstrate that SNR fluctuations significantly impact the success rate of ASCAs, indicating that noise-based defenses may have limited
+reliability in uncontrolled environments. Similarly, Mohammed [20] highlights how background vibrations from nearby objects can interfere with keystroke analysis, reinforcing
+the idea that environmental acoustics can be leveraged as a mitigation strategy. However,
+the practical deployment of such modifications remains challenging, especially in public
+or unpredictable environments, where background noise is inconsistent and cannot be
+easily controlled.
+Overall, the reviewed literature suggests that software-based countermeasures, particularly those employing deep learning techniques like GANs [33] and other AI-driven
+noise-masking approaches [7], offer significant promise for mitigating ASCAs. However,
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+19 of 29
+
+these methods still face challenges, particularly regarding dataset availability, generalization to real-world conditions, and resilience against adversarial adaptation.
+Cryptographic and environmental strategies provide additional defense layers but
+are typically used in conjunction with software-based methods. Given the broad range of
+vulnerabilities exploited by ASCAs, a layered, multi-faceted defense strategy that integrates
+hardware, software, cryptographic, and environmental approaches appears necessary for
+comprehensive protection. Future work should explore hybrid defenses that combine
+noise injection, cryptographic obfuscation, and deep learning-based mitigation to enhance
+robustness across diverse real-world scenarios.
+
+5. Discussion
+5.1. Research Question #1
+How effective are ASCAs in reconstructing typed inputs at different levels of text
+granularity (individual letters, short text, and large text)?
+Answer: Our review of the 19 papers reveals that ASCAs are highly effective in
+reconstructing typed inputs at the level of individual letters under controlled conditions.
+Several studies employing deep learning methods, particularly Temporal Convolutional
+Networks (TCNs), have reported peak accuracies up to 98.3% in extracting keystroke
+events from laptop keyboards [31]. This high level of performance demonstrates that when
+environmental conditions are favorable and signal quality is high, ASCAs can reliably
+reconstruct the individual components of a typed input.
+When it comes to short text—such as words, phrases, or PIN entries—the literature
+shows promising results as well. Notable case studies, including those on the [27,32] attacks,
+have achieved recovery rates of up to 96% for 4-digit PINs and 94% for 5-digit PINs at close
+range. These studies highlight that even with a slight increase in input complexity, acoustic
+methods can still yield highly accurate reconstructions, albeit with some degradation in
+performance as the distance from the source increases or environmental noise rises.
+However, our synthesis indicates a significant research gap regarding the reconstruction of large text, such as full sentences or paragraphs. None of the reviewed papers specifically address the challenges associated with scaling keystroke reconstruction to longer,
+more complex texts. While studies such as [7,31] demonstrate high accuracy in individual
+keystroke classification, and research on [27,32] shows the feasibility of reconstructing short
+text sequences like PINs, their application to continuous text remains unexamined. This
+suggests that while current ASCA techniques are well-developed for extracting individual
+characters and short sequences, their extension to large text reconstruction remains an
+underexplored area that warrants further investigation.
+The effectiveness of ASCAs is closely tied to the environmental conditions under
+which the attacks are executed. Many studies, such as [7,27] report high accuracy in lab
+settings with controlled noise and optimal sensor placement, but their performance tends to
+degrade in real-world conditions where factors like ambient noise, varied keyboard designs,
+and user typing behaviors introduce additional challenges. This variability underscores the
+need for more robust, adaptable techniques that can maintain high performance outside
+the laboratory.
+In summary, the current body of research demonstrates that ASCAs are highly effective
+for reconstructing individual letters and short texts through advanced deep learning and
+statistical machine learning methods. Nonetheless, the reconstruction of large text remains
+an open challenge, and the variability in environmental conditions further complicates the
+generalizability of these results. Future work should address these gaps by exploring new
+techniques and developing more resilient models to extend the applicability of ASCAs to
+more complex text reconstruction tasks.
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+20 of 29
+
+5.2. Research Question #2
+What are the primary analysis techniques (e.g., statistical machine learning, deep
+learning, geometric-based, or cipher-text analysis) employed in ASCAs, and how do
+their performances compare? Additionally, what are the success rates and limitations of
+each analysis technique?
+Answer: The literature reveals that the primary analysis techniques for ASCAs fall
+into two main categories: deep learning-based methods and statistical ML approaches.
+Deep learning techniques, particularly those employing TCNs, have demonstrated high
+accuracy in keystroke inference tasks. For instance, Harrison et al. [7] and Spata et al. [31]
+report peak accuracies of up to 98.3% in controlled experiments by leveraging TCNs to
+model complex temporal dependencies in keystroke acoustics. These deep learning models
+can automatically extract high-level features from raw signals, reducing reliance on manual
+feature engineering.
+Conversely, statistical ML methods—such as those employed in PinDrop [32], UltraPIN [27], and LidarPhone [29]—utilize classifiers like logistic regression, support vector
+machines (SVMs), and other conventional learning algorithms. These approaches are
+particularly effective in PIN inference tasks, achieving success rates as high as 96% for
+4-digit PINs at close range. However, statistical methods tend to struggle with highly
+variable or noisy environments due to their limited ability to generalize across different
+acoustic conditions.
+Deep learning models outperform statistical ML techniques in terms of accuracy
+and adaptability, especially when trained on large, high-quality datasets. However, they
+come with significant computational costs and require substantial labeled training data,
+making real-world deployment challenging. In contrast, statistical ML approaches are
+computationally lighter and can be implemented with less training data, but they require
+careful feature selection and may lack the flexibility needed for diverse scenarios.
+In summary, deep learning–based methods have achieved the highest success rates
+in controlled conditions, while statistical ML techniques remain competitive for simpler
+tasks such as PIN inference. Nevertheless, challenges related to scalability, environmental
+adaptability, and data availability persist, underscoring the need for continued research
+into more efficient and resilient ASCA techniques.
+5.3. Research Question #3
+How do environmental factors, ambient noise, microphone placement, keyboard
+type, and room acoustics impact the effectiveness of ASCAs?
+Answer: Environmental and contextual factors play a critical role in determining
+the effectiveness of acoustic side-channel attacks. Controlled laboratory experiments,
+such as those reported in [7,27], demonstrate high accuracies under ideal conditions
+with minimal ambient noise. However, in real-world settings, factors like ambient noise,
+microphone placement, keyboard type, and room acoustics can significantly degrade
+performance [11,28].
+For instance, ref. [32] highlights how the success rates drop from 96% to 57% for
+4-digit PIN recovery when the distance increases from 0.3 m to 2 m. This indicates that even
+small variations in the environment—such as the presence of background conversations
+or improper sensor placement—can reduce the signal-to-noise ratio (SNR) and lead to
+the misclassification of keystrokes. Similarly, variability in keyboard hardware, including
+differences in key noise levels and mechanical design, introduces additional complexity
+that many studies note as a challenge [34].
+Contextual factors, such as the type of recording device (e.g., smartphone microphones versus professional recording equipment) and the dynamic nature of real-world
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+21 of 29
+
+environments, further complicate the deployment of these techniques outside the lab. Some
+studies, like those focusing on PIN inference from mobile devices [27,31], note that while
+their techniques work well in controlled experiments, their performance might not be as
+reliable in noisy or unpredictable settings.
+Overall, the literature consistently underscores that while ASCA techniques achieve
+high accuracies in controlled environments, their real-world effectiveness is limited by
+environmental noise and contextual variability. This suggests that future research should
+develop adaptive models that can account for these factors and maintain robust performance in diverse operational settings. Table 3 outlines this in further detail.
+5.4. Research Question #4
+What active (encryption, noise injection, adversarial training) and passive (hardware
+shielding, microphone design) countermeasures exist for ASCAs, and how effective are
+they against ML-driven attacks?
+Answer: The reviewed literature proposes a range of countermeasures and mitigation strategies against ASCAs, which can be broadly classified into active and passive
+approaches. Active countermeasures typically involve software-based defenses that dynamically obscure or alter the acoustic signatures. For example, ref. [33] introduces a
+method using generative adversarial networks (GANs) to generate false keystroke sounds.
+This active approach helps mask the real acoustic signals, reducing the effectiveness of
+attackers’ classification models without necessitating hardware modifications.
+Passive countermeasures focus on reducing the physical leakage of acoustic signals.
+Hardware-based solutions may include sound-dampening materials, redesigned keyboards,
+or improved microphone shielding, though these are less commonly proposed in the literature due to cost and retrofitting challenges [11,33]. Cryptographic approaches, such as
+randomized keypads or one-time passwords, do not prevent signal leakage per se but ensure
+that even if keystroke data are intercepted, they cannot be easily exploited. Environmental
+countermeasures, like generating ambient noise or strategically positioning devices, also play
+a supplementary role in reducing the effective SNR available to an attacker [28,35].
+Each category of countermeasure has its strengths and limitations. Active, softwarebased methods are more flexible and can be deployed via updates, but they must strike a
+balance between security and usability to avoid degrading the user experience [33]. Passive
+methods, while offering robust protection by minimizing physical leakage, are challenging
+to implement on legacy systems and may impact device performance or ergonomics [11,28].
+The literature suggests that an effective defense against ASCAs will likely require a multilayered strategy that combines these approaches, though most current solutions have only
+been validated under controlled laboratory conditions [7,31].
+In summary, while various countermeasures show promise in mitigating ASCAs, no
+single approach is sufficient. The current state-of-the-art primarily features active, softwarebased defenses, yet these methods must be enhanced to address the challenges posed by
+real-world variability and sophisticated machine learning–driven attacks.
+5.5. Research Question #5
+What are the major trends in ASCA research from 2020 to the present, and what
+emerging gaps exist due to recent AI advancements (e.g., self-supervised learning,
+transformer-based signal processing)?
+Answer: The recent surge in research on acoustic side-channel attacks reflects a
+strong trend towards leveraging advanced machine learning techniques, particularly deep
+learning models like Temporal Convolutional Networks (TCNs) and GANs, to achieve high
+accuracy in keystroke reconstruction and PIN inference. Studies such as [7,19] illustrate this
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+22 of 29
+
+trend, with models achieving accuracies as high as 98.3% under controlled conditions. This
+trend underscores the increasing sophistication of attack methodologies as they integrate
+cutting-edge AI tools. Table 3 outlines this in further detail.
+Despite these advances, several gaps remain. Notably, the literature reveals a lack
+of research on reconstructing large text sequences (sentences or paragraphs) from acoustic data, as all the reviewed studies predominantly focus on individual letters or short
+text [7,19,31]. Moreover, alternative analysis techniques such as geometric-based or ciphertext analysis remain underexplored, with most studies relying on deep learning or traditional statistical methods [11,12,34]. This gap indicates potential avenues for future research
+to explore more diverse analytical frameworks.
+Emerging domains such as voice-controlled IoT devices and AR/VR systems, as highlighted by the GAZEploit study [36], are also underrepresented in the current body of
+literature. As these technologies become more widespread, their unique acoustic vulnerabilities will likely present new challenges that are not addressed by existing methods.
+Furthermore, the rapid pace of AI advancements, especially in self-supervised learning
+and transformer-based architectures, offers promising new approaches that have yet to be
+fully integrated into ASCA research [8,9]. Expanding research in these areas will be highly
+useful to understand and mitigate future ASCAs.
+The current mitigation strategies, predominantly software-based, also highlight a
+trend toward using deep learning models for both attack and defense. However, their
+practical deployment is hindered by the reliance on large, high-quality datasets and the
+difficulty of replicating controlled experimental conditions in real-world environments.
+This gap between laboratory results and real-world performance calls for further research
+into robust, adaptable countermeasures.
+In summary, while the literature from 2020 onward demonstrates significant progress
+in the development of sophisticated ASCA techniques, key gaps remain—particularly
+in large text reconstruction, alternative analysis methods, and the exploration of emerging application domains. Future research should focus on bridging these gaps by incorporating novel AI architectures and validating proposed methods under diverse, realworld conditions. These trends and gaps have important implications for academic research, industry practices, and regulatory frameworks, underscoring the need for integrated, multidisciplinary approaches to improve security in an increasingly interconnected
+digital landscape.
+5.6. Emerging Avenues in ASCA Research
+Our review indicates that several promising areas in acoustic side-channel attack research remain underexplored. Although many studies concentrate on traditional keystrokebased attacks on laptops and mobile devices, as evidenced by the high accuracies reported
+in papers like [7], few have ventured into the domain of voice-controlled IoT devices.
+As smart speakers and voice assistants proliferate, their inherent acoustic vulnerabilities
+represent a fertile ground for future research. Similarly, while our review covers various
+traditional and deep learning-based approaches, the potential side-channels arising from
+emerging quantum computing technologies such as quantum noise or qubit measurement
+leakage have not been adequately investigated. These avenues suggest that as new technologies mature, novel ASCA vulnerabilities may emerge, demanding proactive research
+to understand and mitigate them.
+5.7. Expanding the Attack Surface Beyond Traditional Devices
+Another underexplored area is the use of augmented reality (AR) and virtual reality
+(VR) devices. For instance, the GAZEploit study [36] demonstrates that eye-tracking data
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+23 of 29
+
+in VR/MR environments can be exploited for keystroke inference, indicating a shift in
+the types of devices vulnerable to side-channel attacks. Despite this intriguing result, the
+broader implications for AR/VR systems have yet to be fully examined, particularly as
+these devices become more integrated into everyday activities. Future research should
+focus on identifying specific attack vectors within these environments and developing
+corresponding countermeasures [8,9,28].
+5.8. Integrating Cross-Modal and Industrial Perspectives
+While several studies in our review address attacks on additive manufacturing (AM)
+systems, such as those highlighted in [30], the intersection of multiple side-channel modalities (e.g., acoustic, electromagnetic, and thermal) in industrial and cyber-physical systems
+remains largely uncharted. The complexity of modern manufacturing, where devices often
+operate in noisy and variable conditions, poses unique challenges that current research
+has not fully addressed. Exploring cross-modal signal processing techniques combined
+with advanced AI could unlock new insights into both attack methodologies and robust
+mitigation strategies in these environments [9,10,13,37].
+5.9. Evaluating Current Mitigation Strategies in Real-World Settings
+Regarding countermeasures, the majority of our reviewed papers propose softwarebased solutions such as deep learning techniques—TCNs and GAN-based defenses, as
+seen in [7,33]. Although these methods have shown impressive accuracy in controlled
+experiments, their feasibility in real-world environments remains uncertain. Factors such as
+ambient noise, diverse user behavior, and hardware variability often hinder these defenses
+when deployed outside laboratory settings [11,20,31]. This gap suggests a critical need
+for extensive field evaluations and the development of hybrid solutions that integrate
+hardware, software, and cryptographic methods [15,26,30].
+5.10. Synthesis and Future Directions
+In summary, while current mitigation strategies demonstrate significant promise under
+ideal conditions, they often fall short in addressing the complexities of real-world scenarios.
+The emerging vulnerabilities in voice-controlled IoT devices [28], AR/VR systems [31], and
+quantum computing platforms [9] highlight the necessity for proactive and adaptive research in ASCA. Future work should prioritize validating these countermeasures in diverse
+operational settings and exploring multi-layered defense strategies that can effectively
+protect against evolving acoustic side-channel threats. By integrating insights from both
+traditional and emerging domains—as well as leveraging cross-modal defenses—we can
+work toward more resilient and comprehensive security solutions.
+Following the completion of this review, a new study titled “Making Acoustic SideChannel Attacks on Noisy Keyboards Viable with LLM-Assisted Spectrograms’ Typo
+Correction” [38] introduced an innovative pipeline that integrates large language models
+into the ASCA decoding process to correct textual errors from noisy keyboard recordings.
+The work employs a hybrid architecture combining mel-spectrogram feature extraction, a
+CoAtNet-based keystroke classifier, and LLM-driven post-processing to refine predicted
+text. Specifically, models such as Llama-3 and GPT-4o were fine-tuned using low-rank
+adaptation (QLoRA) to correct typographical and semantic inconsistencies in keystrokederived text. While this demonstrates a promising direction for leveraging LLMs as
+lightweight error-correction agents within ASCA pipelines, the study relies on the Harrison
+et al. dataset [7], which this review previously identified as having limitations due to its
+small participant size and lack of full words, phrases, or sentences.
+Consequently, while the new research advances the integration of generative AI into
+ASCA post-processing, its dependency on constrained data reinforces this review’s earlier
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+24 of 29
+
+observation that progress in the field is limited by the lack of realistic, publicly available
+datasets. The benchmark dataset by Quattrone and Badr (2025) [39] better reflects realistic typing conditions by incorporating paragraph-level audio and keylogger recordings.
+Leveraging such datasets in future work will be essential for evaluating LLM-assisted error
+correction under realistic operating conditions and ensuring the external validity of these
+promising techniques.
+5.11. Challenges and Implications
+ASCAs present several technical challenges that hinder both their research and realworld deployment. In controlled environments, experiments like those detailed in the deep
+learning-based approaches [7] have achieved impressive accuracies. However, issues such
+as reliability and scalability remain significant obstacles. For example, while Temporal
+Convolutional Networks (TCNs) have demonstrated peak accuracies of up to 98.3% [31],
+these results are often obtained under highly controlled conditions with high-quality
+recordings. In real-world scenarios, environmental noise—ranging from ambient sound to
+variations in keyboard hardware—can severely degrade signal quality, making accurate
+keystroke reconstruction challenging and reducing overall reliability.
+Ethical and legal issues also come to the forefront in the context of ASCAs. The ability
+to infer sensitive data such as passwords and PINs, as shown in studies like [32], raises
+substantial data privacy concerns. The unauthorized interception of keystroke data can lead
+to breaches of personal and corporate confidentiality, challenging existing data protection
+frameworks. At the same time, research in this field must navigate ethical hacking norms,
+ensuring that experimental procedures do not inadvertently violate privacy rights or facilitate
+malicious exploitation. The balance between advancing scientific knowledge and protecting
+individual privacy is delicate, necessitating clear ethical guidelines and robust oversight.
+Standardization and policy considerations further complicate the landscape. Despite
+significant advancements in the detection and mitigation of ASCAs, there is a notable lack
+of unified standards. For instance, current regulatory frameworks, such as the FIPS 140-3
+draft [15], have yet to incorporate acoustic emanations in their security guidelines, leaving
+a critical gap in standardization efforts. This absence of standard policies hampers the
+adoption of effective countermeasures in commercial products and creates uncertainty
+regarding the best practices for defending against ASCAs. Harmonizing technical standards
+with policy directives is essential to ensure that mitigation strategies can be deployed
+effectively across various industries.
+Additionally, the complexity of ASCAs requires an interdisciplinary approach,
+merging insights from hardware design, signal processing, and cybersecurity policy.
+The reviewed literature suggests that a multi-layered defense strategy—which combines hardware-based dampening, software-based noise injection, and cryptographic
+methods—may be the most promising avenue for countering ASCAs [7,11,19]. However,
+the lack of field studies and long-term evaluations in real-world conditions underscores
+the need for further research. Such studies would not only validate the efficacy of these
+countermeasures under diverse environmental conditions but also inform policymakers
+about necessary regulatory updates [15,33].
+In conclusion, while current research demonstrates that advanced machine learning techniques can achieve high accuracy in keystroke reconstruction under controlled
+settings [7,19,31], the transition to real-world deployment is hampered by challenges in
+reliability, scalability, and environmental noise [11,33]. Ethical and legal issues, particularly
+regarding data privacy and responsible disclosure, further complicate the application of
+these technologies [32,40]. The absence of standardized guidelines calls for concerted
+efforts among researchers, industry stakeholders, and regulatory bodies to develop inte-
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+25 of 29
+
+grated, adaptable frameworks that address the technical, ethical, and policy dimensions
+of ASCAs [13,15,30]. Addressing these multifaceted challenges is crucial for developing
+robust, comprehensive security solutions that can effectively mitigate the risks posed by
+acoustic side-channel attacks.
+The findings from these studies carry important implications for academia, industry, and regulatory bodies. For the research community, the high accuracies achieved by
+deep learning pipelines and specialized signal processing methods highlight the technical
+feasibility of ASCAs, yet also expose critical gaps such as scalability under diverse environmental conditions and generalization to natural, unconstrained inputs that require further
+investigation. Papers like A New Deep Learning Pipeline for Acoustic Attack on Keyboards [19] and Acoustic Side Channel Attack on Keyboards Based on Typing Patterns [35]
+serve as both benchmarks and calls to action for interdisciplinary work combining signal
+processing, machine learning, and hardware design. The availability of comprehensive
+datasets such as the MKA Datasets [4] provides a valuable resource for further studies and
+benchmarking, while the documented limitations urge the development of standardized
+protocols for both attack simulation and mitigation.
+For industry and regulators, the demonstrated vulnerabilities, whether in traditional
+computing devices, mobile phones, or even emerging IoT platforms as shown by UltraPIN [27], LidarPhone [29], and Keyboard Acoustic Side Channel Attacks on Android
+Phones in the AI Era of Digital Banking [28], underscore the urgency for proactive security measures. The potential for acoustic eavesdropping to compromise sensitive data,
+including PINs and keystrokes, calls for the integration of robust hardware, software, and
+cryptographic defenses into the design of new devices. Additionally, regulatory frameworks such as those under FIPS 140-3 must evolve to consider non-traditional leakage
+channels like acoustics [6]. As these studies collectively indicate, a multi-layered, standardized approach to security, encompassing rigorous testing, cross-disciplinary research, and
+updated legal and regulatory guidelines, is essential to mitigate the complex risks posed by
+ASCAs in an increasingly connected digital environment.
+
+6. Conclusions
+This systematic literature review provides a comprehensive and updated analysis of
+acoustic side-channel attacks from recent breakthroughs in artificial intelligence and reveals
+a broad spectrum of techniques for executing and analyzing sophisticated attacks. Notable
+attacks include Your PIN Sounds Good! (PinDrop) and UltraPIN Inferring PIN Entries via
+Ultrasound, which demonstrate that acoustic emanations from keyboards or PIN pads can
+be exploited with high accuracy to recover 4-digit PINs in close-range scenarios.
+In parallel, deep learning-based architectures such as Temporal Convolutional Networks have achieved remarkable accuracies under controlled conditions, underscoring
+the technical feasibility of using advanced machine learning to extract keystroke patterns.
+Meanwhile, recent attacks that model typing patterns operate in the frequency domain,
+exploit inter-keystroke timing, or use geometric/triangulation techniques and illustrate
+different trade-offs in accuracy, robustness to noise and room acoustics, data requirements,
+and cross-device transferability.
+A notable trend emerging from the literature is the diversification of targets and attack
+platforms. In addition to traditional laptops and desktops, researchers have demonstrated
+attacks on mobile devices and IoT platforms. For example, Keyboard Acoustic Side Channel
+Attacks on Android Phones (i.e., Digital Banking and LidarPhone with a Lidar Sensor) have
+successfully exploited the ubiquity of smartphones and even repurposed smart devices like
+robot vacuum cleaners for eavesdropping. Furthermore, specialized datasets, such as the
+Multi-Keyboard Acoustic (MKA) Datasets, have enabled robust training and evaluation of
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+26 of 29
+
+acoustic attack models, although challenges remain in capturing real-world variability and
+environmental noise.
+This review highlights that the field’s progress is increasingly constrained by the
+limited availability of large, realistic, and publicly accessible datasets. Many foundational
+corpora, including widely reused collections like Harrison et al. [7], lack essential features
+such as natural typing behavior, the full range of available keyboard keys, environmental
+diversity, and simultaneous keystroke–audio synchronization. As a result, high reported
+accuracies often fail to be generalized beyond laboratory settings.
+To address these limitations, emerging datasets such as the Synchronized Keystroke and
+Acoustic Inference Dataset (SKAID) represent an important step forward [39]. SKAID provides
+long-form, user-generated text, synchronized keystroke logs, high-fidelity audio, demographic
+metadata, and recordings across multiple environments. These characteristics make it wellsuited for evaluating the robustness of ASCA pipelines, benchmarking deep learning models
+under realistic conditions, and enabling research on long-text inference. Incorporating datasets
+of this nature into future ASCA research will be essential for improving ecological validity,
+advancing model generalization, and supporting reproducible experimentation.
+Author Contributions: B.Q. conceived and designed the study, developed the data collection application, and carried out all data acquisition, processing, and analysis. He also prepared the dataset for
+public release and drafted the manuscript. Y.B. served as the academic advisor, providing conceptual
+guidance throughout the research design, methodological refinement, and manuscript development.
+He also contributed to the interpretation of results, reviewed the dataset documentation for clarity
+and completeness, and provided critical revisions to the manuscript. Both authors approved the final
+version of the manuscript and the accompanying dataset release. Large language models were used
+to assist with text refinement and language editing under the author’s supervision. All authors have
+read and agreed to the published version of the manuscript.
+Funding: This research received no external funding.
+Institutional Review Board Statement: Not applicable.
+Informed Consent Statement: Not applicable.
+Data Availability Statement: The SKAID dataset described in this manuscript is publicly available on
+Zenodo at https://doi.org/10.5281/zenodo.17282184 (accessed on 4 December 2025). The repository
+contains the full dataset, organized into the following directories:
+
+•
+•
+•
+•
+•
+
+Participant Recordings/—per-participant subfolders containing audio recordings for both Email
+1 and Free Form tasks.
+Keystroke Logs/—CSV files with keystroke-level event data and corresponding _full_
+text transcriptions.
+all_participants_demographics.csv—participant metadata file with anonymized demographic attributes.
+Email_Version_1.docx—the reference prompt text used for the standardized email typing task.
+README.txt—documentation describing the data organization, file structure, and collection methodology.
+
+All data are shared in open, non-proprietary formats under the Creative Commons Attribution 4.0
+International License (CC BY 4.0).
+Acknowledgments: I would like to express my deepest gratitude to my graduate advisor, Youakim
+Badr, for his invaluable guidance, insightful feedback, and mentorship. His expertise and dedication
+have shaped my understanding of this field and have been essential in refining the direction of
+this research. This work would not have been possible without his continuous support, and I am
+profoundly thankful for his contributions to my academic growth.
+Conflicts of Interest: The authors declare no conflicts of interest.
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+27 of 29
+
+Appendix A. Search Strategy Details per Database
+Table A1. This table outlines the exact search criteria that were used per database during the identification phase for each Research Question.
+RQ #
+RQ1
+
+Research Question
+How effective are ASCAs in
+reconstructing typed inputs at different
+levels of text granularity (individual
+letters, short text, and long text)?
+What are the primary analysis
+techniques (e.g., statistical machine
+learning, deep learning,
+geometric-based, or pattern-based
+analysis) used in ASCAs, and how do
+their performances compare?
+What are the success rates and
+limitations of each analysis technique
+when applied in ASCAs?
+
+IEEE Xplore
+“acoustic side-channel
+attack” OR “keystroke
+reconstruction” OR “text
+recovery”
+“acoustic side-channel
+attack” AND (“machine
+learning” OR “deep
+learning” OR “statistical
+analysis” OR “geometric
+approach”)
+“acoustic side-channel
+attack” AND (“success rate”
+OR “accuracy” OR
+“performance”)
+
+ACM Digital Library
+TITLE: (“acoustic side-channel
+attack”) AND Abstract:
+(“keystroke inference” OR “text
+granularity”)
+TITLE: (“acoustic side-channel
+attack”) AND Abstract: (“machine
+learning” OR “statistical learning”
+OR “geometric method”)
+
+Scopus
+TITLE-ABS-KEY (“acoustic
+side-channel attack” AND
+“keystroke reconstruction”)
+
+Web of Science
+TS = (“acoustic side-channel
+attack”) AND TS =
+(“keystroke reconstruction”)
+
+TITLE-ABS-KEY (“acoustic
+side-channel attack” AND
+“machine learning” AND
+“deep learning” OR
+“geometric method”)
+
+TS = (“acoustic side-channel
+attack”) AND TS =
+(“machine learning” OR
+“deep learning” OR
+“statistical analysis”)
+
+TITLE: (“acoustic side-channel
+attack”) AND Abstract: (“success
+rate” OR “performance”)
+
+TITLE-ABS-KEY (“acoustic
+side-channel attack” AND
+“success rate” OR
+“performance”)
+
+“acoustic side-channel
+attack” AND (“success rate”
+OR “accuracy” OR
+“performance”)
+
+RQ6
+
+How do environmental
+factors—ambient noise, microphone
+placement, keyboard type, and room
+acoustics—impact the effectiveness of
+ASCAs across different machine
+learning models?
+
+TITLE: (“acoustic side-channel
+attack”) AND Abstract: (“noise
+impact” OR “keyboard type” OR
+“room acoustics”)
+
+TITLE-ABS-KEY (“acoustic
+side-channel attack” AND
+“ambient noise” OR
+“keyboard type” OR “room
+acoustics”)
+
+RQ7
+
+What are the challenges and outlook for
+adapting ASCA to more complex
+environments, like open workplaces,
+smart homes, and semi-public settings
+(e.g., coffee shops, coworking spaces)?
+How effective are hardware defenses
+(e.g., noise injection, adversarial
+training) and passive hardware
+shielding (microphone design) as
+countermeasures against ASCAs, and
+how effective are they against
+ML-driven attacks?
+What are the major trends in ASCA
+research from 2020 to the present, and
+what emerging gaps exist due to recent
+AI advancements (e.g., self-supervised
+learning, transformer-based signal
+processing)?
+
+“acoustic side-channel
+attack” AND
+(“environmental factors”
+OR “ambient noise” OR
+“keyboard type” OR “room
+acoustics” OR “microphone
+placement”)
+“acoustic side-channel
+attack” AND (“remote
+work” OR “public
+workspace” OR “IoT
+security”)
+“acoustic side-channel
+attack” AND (“noise
+injection” OR “adversarial
+training” OR “hardware
+mitigation”)
+
+TS = (“acoustic side-channel
+attack”) AND TS =
+(“success rate” OR
+“accuracy” OR
+“performance”)
+TS = (“acoustic side-channel
+attack”) AND TS =
+(“ambient noise” OR
+“keyboard type” OR “room
+acoustics” OR “recording
+quality”)
+
+TITLE: (“acoustic side-channel
+attack”) AND Abstract: (“remote
+work” OR “public workspace” OR
+“IoT environment”)
+
+TITLE-ABS-KEY (“acoustic
+side-channel attack” AND
+“public workspace” OR “IoT
+security”)
+
+TS = (“acoustic side-channel
+attack”) AND TS = (“public
+workspace” OR “remote
+work” OR “IoT security”)
+
+“acoustic side-channel
+attack” AND (“remote
+work” OR “public
+workspace” OR “IoT”)
+
+TITLE: (“acoustic side-channel
+attack”) AND Abstract: (“noise
+injection” OR “adversarial
+training” OR “hardware
+mitigation”)
+
+TITLE-ABS-KEY (“acoustic
+side-channel attack” AND
+“adversarial training” OR
+“hardware mitigation”)
+
+TS = (“acoustic side-channel
+attack”) AND TS =
+(“adversarial training” OR
+“hardware shielding”)
+
+“acoustic side-channel
+attack” AND (“noise
+injection” OR “adversarial
+training” OR “hardware
+mitigation”)
+
+“acoustic side-channel
+attack” AND (“trend” OR
+“survey” OR “systematic
+review”) AND Year:
+2020–Present
+
+TITLE: (“acoustic side-channel
+attack”) AND Abstract: (“research
+trend” OR “SLR”) AND Year ≥
+2020
+
+TITLE-ABS-KEY (“acoustic
+side-channel attack” AND
+“survey” OR “trends”) AND
+PUBYEAR ≥ 2019
+
+TS = (“acoustic side-channel
+attack”) AND TS =
+(“survey” OR “trend” OR
+“systematic review”) AND
+PY = (2020–2024)
+
+“acoustic side-channel
+attack” AND (“survey” OR
+“SLR” OR “trend”) AND
+since:2020
+
+RQ2
+
+RQ3
+
+RQ8
+
+RQ9
+
+Google Scholar
+“acoustic side-channel
+attack” OR site:
+researchgate.net OR
+site:arxiv.org
+“acoustic side-channel
+attack” AND (“machine
+learning” OR “deep
+learning” OR “statistical
+learning” OR “geometric”)
+
+“acoustic side-channel
+attack” AND (“ambient
+noise” OR “microphone
+placement” OR “keyboard
+type” OR “room acoustics”)
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+28 of 29
+
+References
+1.
+2.
+3.
+4.
+
+5.
+6.
+
+7.
+8.
+9.
+10.
+11.
+12.
+13.
+14.
+15.
+
+16.
+
+17.
+18.
+19.
+
+20.
+21.
+22.
+23.
+
+24.
+
+Hansen, S.; Lambert, P.; Bloom, N.; Davis, S.J.; Sadun, R.; Taska, B. Remote Work Across Jobs, Companies, and Space; National Bureau
+of Economic Research: Cambridge, MA, USA, 2023.
+IZA Institute of Labor Economics. Census Bureau Releases New Journey-to-Work Report; IZA Institute of Labor Economics: Bonn,
+Germany, 2023.
+Barrero, J.; Bloom, N.; Davis, S. Why Working from Home Will Stick? National Bureau of Economic Research: Cambridge, MA,
+USA, 2021.
+Gonzalez, N.; Calot, E.P.; Ierache, J.S.; Hasperue, W. The Reverse Problem of Keystroke Dynamics: Guessing Typed Text with
+Keystroke Timings Only. In Proceedings of the 2021 International Conference on Electrical, Cape Town, South Africa, 9–10
+December 2021.
+Kang, P.; Cho, S. Keystroke dynamics-based user authentication using long and free text strings from various input devices. Inf.
+Sci. 2015, 308, 72–93. [CrossRef]
+Standaert, F.X.; Malkin, T.; Yung, M. A Unified Framework for the Analysis of Side-Channel Key Recovery Attacks. In Advances in
+Cryptology—EUROCRYPT 2009, Proceedings of the 28th Annual International Conference on the Theory and Applications of Cryptographic
+Techniques, Cologne, Germany, 26–30 April 2009; Lecture Notes in Computer Science; Springer: Berlin/Heidelberg, Germany, 2009;
+pp. 443–461.
+Harrison, J.; Mehrnezhad, M.; Toreini, E. A Practical Deep Learning-Based Acoustic Side Channel Attack on Keyboards. arXiv
+2023, arXiv:2308.01074. [CrossRef]
+Yin, S.; Fu, C.; Zhao, S.; Li, K.; Sun, X.; Xu, T.; Chen, E. A Survey on Multimodal Large Language Models. arXiv 2023,
+arXiv:2306.13549. [CrossRef] [PubMed]
+Nam, H.; Pothukuchi, R.; Li, B.; Kim, N.S.; Torrellas, J. Defensive ML: Defending Architectural Side-channels with Adversarial
+Obfuscation. arXiv 2023, arXiv:2302.01474. [CrossRef]
+Yan, X.; Chang, C.H.; Zhang, T. Defense against ML-based Power Side-channel Attacks on DNN Accelerators with Adversarial
+Attacks. arXiv 2023, arXiv:2312.04035.
+Taheritajar, A.; Harris, Z.M.; Rahaeimehr, R. A Survey on Acoustic Side Channel Attacks on Keyboards. arXiv 2023,
+arXiv:2309.11012. [CrossRef]
+Wang, P.; Nagaraja, S.; Bourquard, A.; Gao, H.; Yan, J. SoK: Acoustic Side Channels. arXiv 2023, arXiv:2308.03806. [CrossRef]
+Zhou, Y.; Feng, D. Side-Channel Attacks: Ten Years After Its Publication and the Impacts on Cryptographic Module Security
+Testing. IACR Logo Cryptol. Eprint Arch. 2005. Available online: https://eprint.iacr.org/2005/388 (accessed on 4 December 2025).
+Compagno, A.; Conti, M.; Lain, D.; Tsudik, G. Don’t Skype & Type! Acoustic Eavesdropping in Voice-Over-IP. arXiv 2017,
+arXiv:1609.09359.
+Kocher, P.C. Timing Attacks on Implementations of Diffie-Hellman, RSA, DSS, and Other Systems. In Advances in Cryptology—
+CRYPTO ’96, Proceedings of the 16th Annual International Cryptology Conference, Santa Barbara, CA, USA, 18–22 August 1996; Springer:
+Berlin/Heidelberg, Germany, 1996; Volume 1109, pp. 104–113.
+Kocher, P.; Jaffe, J.; Jun, B. Differential Power Analysis. In Advances in Cryptology—CRYPTO’ 99, Proceedings of the 19th Annual
+International Cryptology Conference, Santa Barbara, CA, USA, 15–19 August 1999; Springer: Berlin/Heidelberg, Germany, 1999; pp.
+388–397.
+Asonov, D.; Agrawal, R. Keyboard acoustic emanations. In Proceedings of the IEEE Symposium on Security and Privacy, Berkeley,
+CA, USA, 12 May 2004; Volume 13, pp. 1–26.
+Genkin, D.; Shamir, A.; Tromer, E. RSA Key Extraction via Low-Bandwidth Acoustic Cryptanalysis. In Proceedings of the Annual
+Cryptology Conference, Berlin/Heidelberg, Germany, 18 August 2014; Springer: Berlin/Heidelberg, Germany, 2014.
+Spata, M.O.; Ortis, A.; Battiato, S.; Russo, V.M. A New Deep Learning Pipeline for Acoustic Attack on Keyboards. In Proceedings
+of the 2024 Intelligent Systems Conference (IntelliSys), Amsterdam, The Netherlands, 5–6 September 2024; Lecture Notes in
+Networks and Systems; pp. 402–414.
+Mohammed, M. Acoustic Side Channel Attack on Keyboard. ResearchGate 2024. [CrossRef]
+Cheng, P.; Bagci, I.E.; Roedig, U.; Yan, J. SonarSnoop: Active acoustic side-channel attacks. Int. J. Inf. Secur. 2019, 19, 213–228.
+[CrossRef]
+Shumailov, I.; Simon, L.; Yan, J.; Anderson, R. Hearing your touch: A new acoustic side channel on smartphones. arXiv 2019,
+arXiv:1903.11137. [CrossRef]
+Backes, M.; Dürmuth, M.; Gerling, S.; Pinkal, M.; Sporleder, C. Acoustic Side-Channel Attacks on Printers. In USENIX Security’10:
+Proceedings of the 19th USENIX Conference on Security, Washington, DC, USA, 11–13 August 2010; USENIX Association: Berkeley,
+CA, USA, 2010.
+Oord, A.V.D.; Dieleman, S.; Zen, H.; Simonyan, K.; Vinyals, O.; Graves, A.; Kalchbrenner, N.; Senior, A.; Kavukcuoglu, K.
+WaveNet: A Generative Model for Raw Audio. arXiv 2016, arXiv:1609.03499. [CrossRef]
+
+https://doi.org/10.3390/jcp6010006
+
+J. Cybersecur. Priv. 2026, 6, 6
+
+25.
+
+26.
+27.
+
+28.
+
+29.
+
+30.
+31.
+32.
+
+33.
+
+34.
+35.
+36.
+37.
+38.
+39.
+40.
+
+29 of 29
+
+Schlegel, R.; Zhang, K.; Zhou, X.Y.; Intwala, M.; Kapadia, A.; Wang, X. Soundcomber: A Stealthy and Context-Aware Sound
+Trojan for Smartphones. In Proceedings of the 18th Annual Network & Distributed System Security Symposium (NDSS ’11), San
+Diego, CA, 6–9 February 2011; pp. 17–33.
+Spata, M.O.; Russo, V.M.; Ortis, A.; Battiato, S. Acoustic Side Channel Attack for Keystroke Splitting in the Wild. In Proceedings
+of the IEEE International Conference on Metrology for Extended Reality, Ancona, Italy, 22–24 October 2024; pp. 131–136.
+Liu, X.; Li, Y.; Deng, R.H. UltraPIN: Inferring PIN Entries via Ultrasound. In ASIA CCS ’21, Proceedings of the 2021 ACM Asia
+Conference on Computer and Communications Security, Hong Kong, China, 7–11 July 2021; Association for Computing Machinery:
+New York, NY, USA, 2021.
+Savadatti, M.; Kulkarni, N.; Bansod, G.; Sarkar, P.; Kumar, P.; Sargam, K.; Gulati, P.; Bale, A. Keyboard Acoustic Side Channel
+Attacks on Android Phones in the AI Era of Digital Banking: An Elementary Review. Int. J. Intell. Syst. Appl. Eng. 2023, 12,
+292–300.
+Sami, S.; Tan, S.R.X.; Dai, Y.; Roy, N.; Han, J. LidarPhone: Acoustic eavesdropping using a lidar sensor. In SenSys ’20, Proceedings
+of the 18th Conference on Embedded Networked Sensor Systems, Virtual Event, Japan, 16–19 November 2020; Association for Computing
+Machinery: New York, NY, USA, 2020.
+Yampolskiy, M.; Gatlin, J. Security Threats in AM. In Springer Handbook of Additive Manufacturing; Springer: Cham,
+Switzerland, 2023.
+Spata, M.O.; Russo, V.M.; Ortis, A.; Battiato, S. A New Pipeline for Snooping Keystroke Based on Deep Learning Algorithm. IEEE
+Access 2025, 13, 24498–24514. [CrossRef]
+Balagani, K.; Cardaioli, M.; Cecconello, S.; Conti, M.; Tsudik, G. We Can Hear Your PIN Drop: An Acoustic Side-Channel Attack
+on ATM PIN Pads. In Computer Security—ESORICS 2022, Proceedings of the 27th European Symposium on Research in Computer
+Security, Copenhagen, Denmark, 26–30 September 2022; Lecture Notes in Computer Science; Springer: Berlin/Heidelberg, Germany,
+2022; pp. 633–652.
+Lobanova, A.; He, J.; Zhu, N.; Nazir, A.; Ma, X. Machine-learning-based adaptive keyboard sound masking against acoustic
+channel attacks. In Proceedings of the SPIE—The International Society for Optical Engineering, San Diego, CA, USA, 18–22
+August 2024; Volume 13228, p. 51.
+Taheritajar, A.; Rahaeimehr, R. Acoustic Side Channel Attack on Keyboards Based on Typing Patterns. arXiv 2024, arXiv:2403.08740.
+[CrossRef]
+Zajic’, A.; Prvulovic, M. Understanding Analog Side Channels Using Cryptography Algorithms; Springer Nature: Cham,
+Switzerland, 2023.
+Wang, H.; Zhan, Z.; Shan, H.; Dai, S.; Panoff, M.; Wang, S. GAZEploit: Remote Keystroke Inference Attack by Gaze Estimation
+from Avatar Views in VR/MR Devices. arXiv 2024, arXiv:2409.08122. [CrossRef]
+Mai, K. Side Channel Attacks and Countermeasures. In Introduction to Hardware Security and Trust; Springer: Berlin/Heidelberg,
+Germany, 2011; pp. 175–194.
+Ali, A.S.; Park, J.H.; Cai, Y.; Botacin, M. Making Acoustic Side-Channel Attacks on Noisy Keyboards Viable with LLM-Assisted
+Spectrograms. Typo” Correction. arXiv 2025, arXiv:2504.11622.
+Quattrone, B.; Badr, Y. SKAID: A Realistic Dataset for Acoustic Side-Channel Attacks with Synchronized Keyboard Audio and Keystroke
+Logs for AI-Based Inference; The Pennsylvania State University: University Park, PA, USA, 2025.
+Javed, A.R.; Rehman, S.U.; Khan, M.U.; Alazab, M.; Khan, H.U. Betalogger: Smartphone Sensor-based Side-channel Attack
+Detection and Text Inference Using Language Modeling and Dense MultiLayer Neural Network. ACM Trans. Asian Low-Resour.
+Lang. Inf. Process. 2021, 20, 1–17. [CrossRef]
+
+Disclaimer/Publisher’s Note: The statements, opinions and data contained in all publications are solely those of the individual
+author(s) and contributor(s) and not of MDPI and/or the editor(s). MDPI and/or the editor(s) disclaim responsibility for any injury to
+people or property resulting from any ideas, methods, instructions or products referred to in the content.
+
+https://doi.org/10.3390/jcp6010006
+
+

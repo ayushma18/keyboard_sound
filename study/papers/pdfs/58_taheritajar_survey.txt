@@ -1,0 +1,1399 @@
+A Survey on Acoustic Side Channel Attacks on Keyboards
+ALIREZA TAHERITAJAR, Augusta University, USA
+ZAHRA MAHMOUDPOUR HARRIS, Shariaty Technical College, Iran
+REZA RAHAEIMEHR, Augusta University, USA
+Most electronic devices utilize mechanical keyboards to receive inputs, including sensitive information such as authentication
+credentials, personal and private data, emails, plans, etc. However, these systems are susceptible to acoustic side-channel attacks.
+
+arXiv:2309.11012v2 [cs.CR] 25 Sep 2023
+
+Researchers have successfully developed methods that can extract typed keystrokes from ambient noise. As the prevalence of keyboardbased input systems continues to expand across various computing platforms, and with the improvement of microphone technology,
+the potential vulnerability to acoustic side-channel attacks also increases. This survey paper thoroughly reviews existing research,
+explaining why such attacks are feasible, the applicable threat models, and the methodologies employed to launch and enhance these
+attacks.
+CCS Concepts: • Security and privacy → Hardware attacks and countermeasures; Side-channel analysis and countermeasures;
+Additional Key Words and Phrases: Side Channel Attacks, Acoustic Side Channel Attacks, Keystroke Recognition, Acoustic Signal
+Analysis, Keyboards Vulnerabilities, Keylogging
+ACM Reference Format:
+Alireza Taheritajar, Zahra Mahmoudpour Harris, and Reza Rahaeimehr. 2023. A Survey on Acoustic Side Channel Attacks on Keyboards.
+1, 1 (September 2023), 22 pages. https://doi.org/10.1145/1122445.1122456
+
+1
+
+INTRODUCTION
+
+With emerging cyber crimes in the 1980s, hacking and stealing data, and consequently, data privacy and confidentiality,
+became the new concerns for computer scientists. Since then, scientists have tried to find better mechanisms to secure
+systems, and hackers have attempted to break the current mechanisms or discover new vulnerabilities. Although several
+well-thought privacy and confidentiality preserving mechanisms have been introduced in theory, achieving a perfectly
+secure system is impossible in practice. One reason is that every process in the world has some side effects; Every process
+consumes some energy and may have noise, generate vibration, emit optical particles, change electromagnetic fields,
+produce heat, and delay the execution of other processes. And all these side effects, to some extent, leak information
+about the process.
+In computer science, using the side effects of a process to gain knowledge about the process is called Side-Channel
+Attack. This type of attack is applicable on any system, no matter how carefully the system is designed. In 1973, Butler
+W. Lampson et al.[41] discussed the possibility of abusing intermediate files and resources used or generated during a
+process. In 1985, a research project[71] explained the possibility of eavesdropping on display units by gathering and
+Authors’ addresses: Alireza Taheritajar, ataheritajar@augusta.edu, Augusta University, Augusta, Georgia, USA; Zahra Mahmoudpour Harris, zmahp65@
+gmail.com, Shariaty Technical College, Tehran, Tehran, Iran; Reza Rahaeimehr, rrahaeimehr@augusta.edu, Augusta University, Augusta, USA,
+rrahaeimehr@augusta.edu.
+Permission to make digital or hard copies of all or part of this work for personal or classroom use is granted without fee provided that copies are not
+made or distributed for profit or commercial advantage and that copies bear this notice and the full citation on the first page. Copyrights for components
+of this work owned by others than ACM must be honored. Abstracting with credit is permitted. To copy otherwise, or republish, to post on servers or to
+redistribute to lists, requires prior specific permission and/or a fee. Request permissions from permissions@acm.org.
+© 2023 Association for Computing Machinery.
+Manuscript submitted to ACM
+
+Manuscript submitted to ACM
+
+1
+
+2
+
+Alireza Taheritajar et al.
+
+analyzing their electromagnetic interference. In 1996, Paul Kocher et al.[39] published the first significant attack in this
+area. They discovered they could break some RSA-based cryptosystems by analyzing the time it takes to do the private
+key operations. The attacks [43, 15, 38, 39, 5, 34, 75, 33, 11, 42, 69, 21, 28, 40, 24, 4] are just a short list of side-channel
+attacks that demonstrate how different side effects can be used to lunch fatal attacks.
+In 2004, R. Agrawal [6] could successfully lead an effort to use acoustic emanations of keystrokes to partially extract
+the data typed by mechanical keyboards and ATM pads. Since then, tens of published works have been done by
+researchers to improve the performance of prior works or find a better way for specific scenarios. With the advance of
+technology, emerging better recording devices, and new ways to record acoustic emanations, acoustic side-channel
+attacks on keyboards are more feasible and accurate nowadays.
+This paper results from our comprehensive literature review covering more than 170 papers. In short, we categorize
+attack types, briefly explain the techniques used to lunch attacks, compare the success rate of each attack, and discuss
+the efficiency and applicability of attacks in different scenarios. This work gave us the insight to initiate two projects in
+this area, and we try to help researchers to understand the area faster and more conveniently.
+
+2
+
+WHY IT IS FEASIBLE
+
+Acoustic side-channel attacks on keyboards result from sound and vibration produced by pressing and releasing the
+keys of keyboards.
+
+2.1
+
+Distinguishable Sounds
+
+You have probably noticed the difference between the noise produced by pressing specific keys like Enter and Space.
+Each keystroke may create some specific sounds for two main reasons: the physics of keyboards and typing styles
+of people. Physically there is a key plate under the keys of each keyboard. Like when a person plays drum when a
+person presses a key, it strikes a specific point on the key plate that generates a unique noise[6, 55]. Other reasons,
+like microscopic differences in keys’ production and the different environment of each key, are also mentioned for the
+diversity of keystroke noises[6]. However, based on our experiments, the differences made by them are not significant
+enough to launch a successful attack. Type style is the other important factor. People may press different keys with
+different fingers, pressure, or angles, which in turn, different noises with different intensities might be generated [55].
+In addition, people may type some words or syllables with certain styles that some AI techniques can exploit to lunch
+successful attacks on specific victims. More on this and examples are explained in the following sections.
+
+2.2
+
+Practically Recordable Sounds
+
+There are several scenarios in that attackers can record keystroke Sounds. Here we categorize them into the followings:
+(1) Physical Proximity: Today, mobile phones have powerful microphones that have become a good option for
+recording high-quality stereo sound. Some smartphones have two or three powerful microphones that are good
+enough to eavesdrop on keystrokes up to 1 meter [79] [44] [72] [3] [45] [56] [8].
+In some papers, authors assume that the attacker is physically near the victim and, using a small microphone
+or a cellphone records the victim’s keystroke noises. In [79] victims work in public areas like coffee shops or
+libraries. In [53], [3], [72] the attacker or his allies can visit/intrude on the victim’s office, or leave a smartphone,
+a hidden microphone, or mp3 players near the victim[56]. Some authors consider a scenario where the victim
+Manuscript submitted to ACM
+
+A Survey on Acoustic Side Channel Attacks on Keyboards
+
+3
+
+and the attacker are waiting to get a service from a machine by entering a code or password on a keypad[6] [45]
+[54] [26] [58] [13] [66] [67]. ATM machines, POS devices, and digital door locks are examples of such machines.
+
+(a) Spying microphone
+
+(b) Spying Phone
+
+(c) Public Area like a library
+
+(d) In a queue like a bank ATM
+
+Fig. 1. Examples of Physical Proximity scenarios
+
+(2) Physical access: in some cases, an attacker may have physical access to the victim’s device for a limited time.
+For example, the victim may have a shared office with the attacker, or the device itself might be a shared device
+like the computers of public sites in hotels, car dealers, hospitals, banks, and governmental offices. Some special
+keyboards like pin pads are shared devices by nature. This scenario works for all attack methods which only
+focus on the physical characteristics of audio signals and keyboards[30] [31].
+
+Fig. 2. Direct access to the victim’s device for a limited time
+
+(3) Indirect physical access: The attacker may not gain access to the victim’s device, but he can provide a similar
+device. Although the success rate of attacks may reduce with this approach, it is still a practical attack scenario.
+Note that most companies and government offices use a limited set of brands and models. It is not hard to find
+out the common keyboard models used in a company and buy a similar keyboard and lunch experiments with
+them.
+(4) Remote indirect access: In this method, the attacker tries to record keystroke noises using a medium tool:
+• Trojans: to accomplish the attack, the attacker may create a malicious application that masquerades as a
+legitimate app, such as a game, virtual journal, or weather app, which is then uploaded to a typical app
+marketplace like Google Play and App Store [18] [17]. One can be a malicious app installed on the victim’s
+phone, [29] [78] [27] smartwatch [23], or computer. The adversary has different methods of installing this
+malicious app. Firstly, the victim may naively install the app[63] [62]. Secondly, social engineering techniques
+may trick the victim into installing the app. Lastly, the adversary may access the victim’s phone somewhere
+and download the app. Once the malicious application is installed, it requests access to microphone privileges,
+Manuscript submitted to ACM
+
+4
+
+Alireza Taheritajar et al.
+
+which users often overlook and grant to the app without question [18] [77] [20] [2]. This allows the adversary
+to use the microphone to record audio without the user’s knowledge or consent. Several studies have shown
+that many popular apps request microphone access and users tend to grant this access without considering
+the consequences. [36] [72] [61] [63] [64] [51] [44] [52]
+• Hacking third-party applications: Attackers can exploit software bugs to gain unauthorized access to a person’s
+computer or mobile device, allowing them to steal sensitive information or spy on the user. One way attackers
+can exploit software bugs is by using them to access a device’s microphone. Doing so allows them to record
+ambient sounds without the person’s knowledge, including keystroke noises [49]. In [2], authors can record
+victims’ ambient sound by using the recorder plugin for Skype named "Supertintin" [2].
+• Voice assistant devices: Like any other connected device, voice assistant devices are potentially vulnerable to
+spying attacks. One potential vulnerability of voice assistant devices is that they can be hacked or compromised
+through vulnerabilities in their software or firmware, which could allow attackers to remotely access the
+device, listen to conversations, or perform malicious actions. [77] [17]
+
+(a) Remote indirect access
+
+(b) malicious application on Pc
+
+(c) Voice assistant devices
+
+Fig. 3. Examples of Remote indirect access
+
+(5) VoIP and Online meetings: Voice over Internet Protocol (VoIP) is a technology that allows voice communication
+to be transmitted over the Internet instead of traditional telephone lines. Recently, it has become increasingly
+popular as an alternative to traditional telephone services. VoIP offers a range of additional features and
+capabilities, such as video conferencing, screen sharing, and instant messaging. Attackers can record audio
+signals and keystrokes during a Voice-over-IP (VoIP) call or online meetings using software such as Zoom, Skype,
+or Google Hangouts without having to install malware on the victim’s phone[14] [19] [2][60]. This method
+differs from other methods in that the attacker can, even during a seemingly legitimate and ordinary online
+meeting or voice call, record the ambient noise of the victim.
+The attack is made possible by assuming that most users multitask during VoIP calls and online meetings and
+engage in sensitive activities such as sending emails, chatting, taking notes, paying financial bills, and entering
+PINs and random passwords. When a user presses a key, it produces a sound transmitted to the other side of the
+call, allowing attackers to capture the audio packets and remotely decode the keystrokes.
+3
+3.1
+
+ATTACK SURFACE
+Recording Medium
+
+Data collection is the most critical step of an acoustic side-channel attack. Without appropriate data, launching a
+successful attack is less feasible. In our case, the appropriate data is the clear keystroke sounds; Any other voice is
+Manuscript submitted to ACM
+
+A Survey on Acoustic Side Channel Attacks on Keyboards
+
+(a) Online Meeting
+
+5
+
+(b) VOIP Call
+
+Fig. 4. Example of VoIP and Online meetings
+
+Fig. 5. Parabolic Microphone
+
+considered noise. Less noisy environments like public libraries or private offices increase the chance of successful
+acoustic side-channel attacks. Researchers considered a variety of recording devices in the data-gathering stage:
+(1) Off-the-shelf microphones, attacker’s cellphone or voice recorder: These devices can be used when the
+attacker has physical access to the victim’s office or when the victim works in quiet public environments like
+hotel lobbies or libraries. These recording devices should be placed near the victim’s keyboard (less than a
+meter)[79] [44] [72] [47] [45] [56] [13] [66].
+(2) Victim’s cellphone or computer: Generally, these devices are the better recording devices to gather the
+required data, because they are the nearest thing to the victim’s keyboard. People put their cell phones in close
+proximity to their keyboards. A laptop’s internal microphone is another suitable recording device if the target is a
+laptop. The downside of this approach is that the attacker must compromise the victim’s cellphone or laptop. But,
+it makes remote attacks possible and usually gathers less noisy data[50] [61] [26] [8] [64]. It should be mentioned
+that some researchers assume attackers capture the victim’s keystroke sounds during a legitimate-looking online
+meeting. In this case, even though the attacker uses the victim’s computer to gather the keystroke sounds, there
+is no need to compromise the victim’s computer[14] [19].
+(3) Hyperbolic or parabolic microphones: These are special recording devices that capture weak sound emitting
+from a far source using a reflective dish (See Figure 5). The dish focuses incoming sound waves onto a small
+microphone to capture distant sounds with enhanced clarity. Hyperbolic microphones are commonly used in
+wildlife recording, surveillance, sports broadcasting, and long-range audio capture applications. They excel at
+picking up sounds from specific directions while reducing ambient noise and interference. In [6], the authors
+could launch an acoustic side-channel attack on a keyboard from a 15-meter distance.
+Manuscript submitted to ACM
+
+6
+
+Alireza Taheritajar et al.
+
+3.2
+
+Keyboard Types
+
+(1) Mechanical PC keyboards: Using a commodity mechanical keyboard (See Figure 6) to interact with PCs,
+Laptops, and Notebooks is common. This type of keyboard produces more audible noises, making them more
+vulnerable to acoustic side-channel attacks. Hence, most articles like [6] [56] [55] [25] [10] [30] [73] [31] [36]
+[59] [79] [72] have focused on them. In general, laptop keyboards have softer keys and emanate fewer noises. [8]
+[45] Therefore, they are less vulnerable to many attacks, and most researchers have reported lower success rates
+than PCs’ mechanical keyboards [30] [31] [6]
+
+Fig. 6. Mechanical keyboards
+
+(2) Virtual Keyboards: Most modern smartphones use software-based virtual Keyboards, which can be used to
+enter PIN codes, authentication patterns, or text (See Figure 7). This type of keyboard is also vulnerable to
+acoustic side-channel attacks. In [29] [62], the authors target the virtual keyboard of Android smartphones or
+tablets. Zarandy et al. implemented an attack on the virtual keyboard of an Android smartphone, which extracts
+the Pin codes[77]. In another work[18], the unlock pattern of Android phones was attacked. In [61], the authors
+designed a malicious app (like a Trojan) that legitimately grants mic access from victims, records phone calls,
+and extracts sensitive information like credit card numbers when victims need to enter them over a phone call.
+A series of works [47], [37], [76], [52] tried to extract keystrokes on touchscreen QWERTY keyboards.
+
+Fig. 7. Virtual keyboards
+
+(3) PIN Keypads: PIN keypads (See Figure ??) are electronic devices used for entering personal identification
+numbers (PINs). They are commonly found in a wide range of security systems and payment processing
+applications, such as automated teller machines (ATMs), point-of-sale (POS) terminals, and door access control
+systems. PIN keypads typically consist of a panel of a few buttons, and people usually use only one figure to enter
+sensitive information one by one. Consequently, they are more attractive and vulnerable to acoustic side-channel
+attacks [54], [26], [13], [58].
+Manuscript submitted to ACM
+
+A Survey on Acoustic Side Channel Attacks on Keyboards
+3.3
+
+7
+
+Target Data
+
+Researchers have tried to increase their attack success rate by limiting the target of the attacks. Here is the list of some
+data types that were the target of attacks:
+(1) Unlock patterns: A phone unlock pattern is a security feature commonly found on Android devices. It involves
+tracing a specific pattern on a grid of dots displayed on the phone’s lock screen. This pattern serves as a passcode
+to unlock the device and access its contents. The papers [18] and [78] are two examples of papers that focused
+on Android unlocking patterns.
+(2) Single keys: Many beginners tend to press keyboard keys individually, allowing attackers to distinguish each
+key’s sounds clearly. Even professional typists may create a noticeable gap between keystrokes when entering
+one-time codes or random passwords, which enables the same thing. Assuming there are some scenarios that
+allow us to gather clear sound of keystrokes, several works have been focused on detecting single keys [25][52][6]
+[44] [22] [59][50].
+(3) passwords: Passwords, the common login credentials, are the most attractive data for most attackers. Hackers
+target login credentials to gain unauthorized access to various accounts, such as email, social media, banking,
+or corporate systems. Hence it has been the subject of many research [79] [36] [80] [10] [8] [64] [73]. Some
+researchers have focused on special types of passwords. For example, Panda et al. targeted only numerical
+passwords[54]; Halevi et al. worked on passwords consisting of lower-case English alphabets [30]; and Ponnam
+et al. investigated extracting passwords composed of English words[55].
+(4) Text: Texts may also contain sensitive or private information. Consequently, some researchers have been focused
+on extracting typed text from ambient noises[79] [36] [80] [10] [8] [64] [73] [80] [36] [29]. Typically excluding
+typos, a text consists of punctuation marks and words that can be found in a dictionary. Moreover, texts adhere
+to a structure and often follow some recognizable patterns. These features allow researchers to improve their
+method by filtering out less likely options.
+(5) PIN Code: PIN stands for Personal Identification Number. PIN codes are a particular type of password consisting
+of some digits; usually, the length of PIN codes in a system is fixed and known, and they are used as a convenient
+way for authenticating people. PIN codes are widely used in ATM and POS devices to authorize transactions
+and access funds, mobile devices as unlocking codes, and security Systems and digital locks to grant access to
+restricted areas or buildings. Hence, we categorized them as an independent category. Researches like [63] [61]
+[2] [54] [62] focused on PIN codes.
+(6) Miscellaneous: In 2015, Anand et al.[3] designed an acoustic side-channel attack against the Tapping-based
+Rhythmic Password mechanism[74], which Wobbrock had introduced in 2009. Wang et al. proposed a method to
+counter fast typists in 2016. When a typist presses two consecutive keys in a short interval, the signals of the two
+keystrokes become mixed. As a result, methods that rely on individual keystroke signals are ineffective. Their
+approach works by considering two combined keystrokes and utilizes the blind signal separation technique to
+separate the mixed signals[72].
+
+4
+
+ATTACK STRATEGIES
+
+This section explores the predominant approaches for identifying keystrokes using acoustic signals. These procedures
+may involve several stages, including the keystroke signal detection stage. Note that the accuracy of the keystroke signal
+Manuscript submitted to ACM
+
+8
+
+Alireza Taheritajar et al.
+
+detection stage significantly influences the overall outcome [80]. We classify the attack strategies into the following
+categories.
+
+Fig. 8. Illustration of a Hidden Markov Model (HMM) trace, with each vertical segment corresponding to a time step. Within each
+time step, the upper node qt represents a character pair, while the lower node yt represents the observable variable indicating the
+latency between consecutive keystrokes [65].
+
+4.1
+
+Timing-based Analysis
+
+Timing information is a type of side-channel information related to typing patterns. Timing information includes
+the time between the start or end of two keystrokes, the duration of each key press, the time from keystroke push
+to keystroke release, and so on [26, 45]. As illustrated in Figure 8, Foo et al. [26] applied the techniques developed
+by Song et al. [65], utilizing a Hidden Markov Model (HMM) for analyzing inter-keystroke timings in the context of
+inter-keystroke timing attacks. [46] suggests user-independent inter-keystroke timing attacks on PINs using a human
+cognitive model. The findings indicate that their attack methods yielded favorable performance results.
+4.2
+
+Frequency-based Analysis
+
+This technique focuses on analyzing acoustic signals in the frequency domain. Typically, researchers employ the Fast
+Fourier transform (FFT) to convert signals from the time domain into the frequency domain, which serves as the base
+of their recognition system. Additionally, researchers leverage cepstrum features, a common choice in speech analysis
+and recognition systems. Empirical evidence demonstrates that cepstrum features, especially mel-frequency cepstral
+coefficients (MFCCs) [80], tend to outperform plain FFT coefficients when processing sound signals. MFCC applies
+the Fourier transform to yield the frequency content of the input signal. The attackers require these features from the
+signal data to detect and classify each keystroke.
+4.2.1 Signal Processing and Statistics Techniques. In [54], Panda et al. propose a side-channel attack on a 4–6 digit
+random PIN key and achieve a 60% accuracy in recovering them. Their sample victims were asked to memorize a six-digit
+number and type it repeatedly to adapt themselves to this new PIN sequence. Then, they captured the victims’ keystroke
+sounds to build their dataset. They generated a feature vector of recorded signals using a Fast Fourier Transform (FFT)
+and used it as input for various techniques, such as Cross-Correlation and Euclidean distance. The study by Halevi et al.
+[31] introduces a time–frequency decoding technique for identifying passwords. It also meticulously investigates the
+influence of typing style on detection accuracy. The findings reveal that when employing the same typing style (hunt
+and peck) for both data training and decoding, the optimal success rate for accurately detecting a typed key stands
+at 64% per character. Furthermore, the study demonstrates that altering the typing style to touch typing during the
+Manuscript submitted to ACM
+
+A Survey on Acoustic Side Channel Attacks on Keyboards
+
+(a) The spectrogram of L key acoustic trace.
+
+9
+
+(b) The spectrogram of D key acoustic trace.
+
+Fig. 9. Spectrograms depicting two distinct keystrokes. [50].
+
+decoding phase diminishes the success rate to approximately 40% per character. This approach can potentially decrease
+the entropy of the search space for random passwords by up to 57% per character.
+4.2.2 Classical Machine Learning-based Techniques. Machine learning is crucial in extracting pertinent features from
+acoustic data, facilitating more accurate key recognition. These models are trained to discern patterns within acoustic
+signals linked to different keystrokes, enabling them to predict the pressed keys effectively. Machine learning algorithms,
+including Support Vector Machines (SVM), Random Forests, and neural networks, can be trained using labeled acoustic
+data to classify recorded sounds into specific key presses. Furthermore, machine learning models can be deployed for
+real-time keystroke detection and inference, making them valuable tools that raise concerns about potential security
+breaches. [80] uses three different ML methods, including Neural Network, Linear classification(Discriminant), and
+Gaussian Mixture, to classify acoustic signals. In the study by Anand et al. [2], they utilize FFT coefficients and MFCC
+as distinguishing attributes for individual keystrokes. These features are employed in supervised machine learning
+methods, including Logistic Regression and Random Forest, to analyze random passwords and numeric PINs. In the
+paper by Halevi et al. [30], they employ a method based on frequency-domain features. They utilize Mel-Frequency
+Cepstral Coefficients (MFCC) as inputs for neural networks and apply a 10 ms window with a 2.5 ms window step size,
+computing 13 MFCCs per window. They analyze a total duration of 40 ms for each keypress event. They use Matlab’s
+newpnn() function to create the neural network. In [6], a proposed attack utilizes a neural network for recognizing the
+pressed keys. The authors employed the JavaNNS neural network simulator to construct a backpropagation neural
+network. They utilized the Fast Fourier Transform (FFT) extracted from an 8–10 ms window around the key press peak
+as the feature. Cecconello et al. [14] employed a Logistic Regression classifier to categorize a dataset containing ten
+samples for each of the 26 English alphabet keys. This classification was carried out using a 10-fold cross-validation
+approach. The authors assessed the classifier’s accuracy using various spectral features, including FFT coefficients,
+cepstral coefficients, and MFCC.
+4.2.3 Deep Learning-based Techniques. Applying FFT to the signal gives us only frequency values, and we lose track
+of time information. The system won’t be able to tell what was recorded first if we use these frequencies as features.
+Here, Spectrograms come into the picture. The visual representation of frequencies of a given signal with time is called
+a Spectrogram. The idea is to break the audio signal into smaller frames(windows) and calculate DFT (or FFT) for
+each window. This way, we will get frequencies for each window, and the window number will represent the time.
+Manuscript submitted to ACM
+
+10
+
+Alireza Taheritajar et al.
+
+In a spectrogram representation plot, one axis represents the time, the second axis represents frequencies, and the
+colors represent the magnitude (amplitude) of the observed frequency at a particular time. (Bright colors represent
+strong frequencies). This is a 2D matrix representing the frequency magnitudes and time for a given signal. Now, think
+of this spectrogram as an image. This reduces the problem to an image classification problem. Harrison et al. [32]
+employed a deep learning model to classify laptop keystrokes. They captured keystroke sounds using the integrated
+microphone of a smartphone and utilized mel-spectrograms as input for an image classification model named CoAtNet.
+Their proposed classifier achieved an accuracy of 95% under certain conditions, all without utilizing a language model.
+Furthermore, they conducted training on keystroke sounds recorded through the video-conferencing software Zoom,
+attaining an accuracy of 93%. As shown in Figure 10 in the study by Giallanza et al. [27], researchers designed a system
+that combined convolutional and recurrent neural networks for keystroke detection and identification, respectively.
+This system was tested in an experiment involving 20 participants who typed naturally while conversing. The findings
+indicated that mobile phone arrays could identify approximately 41.8% of keystrokes and 27% of typed words accurately
+in a noisy setting, even without personalized user training. To assess the potential security implications of this attack,
+the authors transformed the machine learning models into a real-time system capable of distinguishing keystrokes
+using an array of mobile phones. The system’s performance was evaluated through trials with a single user typing
+under varying conditions.
+In the paper by Akinbi et al. [1], audio signals are initially transformed into audio images using the spectrogram
+representation of the Mel-Frequency Cepstral Coefficients (MFCC) method. Subsequently, a vision transformer-based
+approach called ConvMixer is employed on these spectrogram images to identify passwords based on their audio
+characteristics. The authors achieved an average accuracy score of 92.44% in their experimental work. Additionally, a
+comparison is made with two pre-trained convolutional neural network (CNN) models, namely ResNet18 and VGG16.
+This comparison underscores the potential of the proposed approach as a compact acoustic keylogger system. Toreini
+and colleagues [70] harnessed advanced techniques in signal processing and machine learning to discern individual
+Enigma keys. Their experimentation involved the detection of four distinct peaks within each sound sample, employing
+an LPC-based method in the preprocessing stage. In the feature extraction process, they derived MFCC (Mel-frequency
+cepstrum coefficients) from the audio samples. The highest recognition rate of 92.18% was achieved by utilizing an
+Artificial Neural Network classifier. In the paper by Martinasek et al. [50], a spectrogram (as shown in Figure 9) serves
+as the input for a standard two-layer neural network trained using the backpropagation learning algorithm, with no
+additional tools applied to enhance classification results. The recording setup involved a laptop with an integrated
+microphone in an office setting. The resulting average success rate for first-order classification in this experiment was
+72.3%.
+
+4.3
+
+Geometry-based Attacks
+
+These techniques are based on the geometric positions of keys on keyboards and are employed to estimate the positions
+of pressed keystrokes [79]. A key can be identified by computing the differences in arrival times of a sound wave at
+two or more microphones [25]. Geometry-based approaches can detect and identify pressed Keys Regardless of the
+type and meaning of the entered text, so they can work on random texts such as passwords. Using various approaches
+such as Time Difference of Arrival (TDoA), Triangulation, and differential audio analysis (DAA), attackers estimate the
+candidate area of a typed key.
+Manuscript submitted to ACM
+
+A Survey on Acoustic Side Channel Attacks on Keyboards
+
+11
+
+Fig. 10. Convolutional network architectures used for keystroke classification [27].
+
+4.3.1 Time Difference of Arrival and Triangulation Attacks. Zhu et al. [79] introduces an innovative technique that
+offers context-independent keystroke recovery, even when inputted randomly. Their methodology involves employing
+two or more smartphones to capture acoustic emanations resulting from keystrokes[59]. This technique then processes
+the collected acoustic signals, employing a geometrical framework that leverages the Time Difference of Arrival (TDoA)
+methodology to pinpoint the physical location of the pressed key. The TDoA technique calculates the variations in the
+distance between the key and each microphone, ultimately enabling the estimation of a set of potential key positions on
+a plane. This candidate key set is progressively narrowed down through the collaborative effect of multiple microphone
+pairs. Their experimental results demonstrate an impressive success rate of over 72.2% in accurately recovering
+keystrokes. Cheng and colleagues [16] present an approach for determining keystroke positions through the Time
+Difference of Arrival (TDoA) technique and subsequently reconstructing words via a dictionary. This attack employs just
+a single phone and doesn’t necessitate any training. The outcomes reveal a 45.2% success rate in correctly identifying
+words within the top 50 candidates across the tested vocabulary. Moreover, for words exceeding 10 characters, the
+success rate improves to 46.3% within the top 25 candidates. As shown in Figure 11, by employing the Time Difference of
+Arrival (TDoA) technique to locate keystrokes, researchers can eliminate the need for labeled training data or linguistic
+Manuscript submitted to ACM
+
+12
+
+Alireza Taheritajar et al.
+
+(a) Geometrical TDoA measured by a pair of microphones.
+
+(b) Theoretical key groups and corresponding half hyperbolas.
+
+Fig. 11. This is an illustration of the geometrical TDoA on a single phone and the theoretical key groups [44].
+
+context. Experiments conducted with three different types of keyboards and off-the-shelf smartphones demonstrate
+scenarios where this system can recover 94% of keystrokes, as reported in [44].
+Another related approach to this kind of attack is an acoustic triangulation attack. This attack involves determining an
+object’s position by measuring acoustic waves produced by a keystroke [12]. Triangulation is a method for determining
+the distance of a point through the application of triangle-based principles. The distance is considered as one of the sides
+of a triangle, computed by measuring its angles and other sides. Triangulation is a widely employed approach for object
+localization, finding applications in fields such as surveying, navigation, and astrometry [25]. Fiona et al. [25] calculated
+the differences in arrival times of sound waves at two microphones installed at specific locations beside the keyboard.
+They employed both the maximum peak position approach and the correlation approach, achieving a recognition rate
+of up to 80% with a 5-minute computation. In Ranade’s study [58], the triangulation method achieved an accuracy of
+87.5% in distinguishing between four keys on an ATM keypad. In the paper by Bai et al. [8], they introduce a scheme
+that utilizes a single smartphone with dual microphones for conducting a side-channel attack. Their approach includes
+an efficient environment estimation scheme to overcome challenges related to microphone positioning variability and
+the scarcity of training data. The proposed scheme predicts keystrokes based on their locations and achieves a correct
+identification rate of 91.2%.
+
+Fig. 12. Foundational concepts of touchscreen keystroke localization using acoustic signal attenuation[47].
+Manuscript submitted to ACM
+
+A Survey on Acoustic Side Channel Attacks on Keyboards
+4.3.2
+
+13
+
+Differential Audio Analysis. In [66], the authors introduce a method called DAA (differential audio analysis) for
+
+analyzing the differential attributes of sounds recorded by two microphones situated within the device’s empty space.
+This analysis is conducted through the transfer function between the two captured signals. The method is employed on
+four-digit PIN pads. The authors successfully identify all 1200 keystrokes from two independently tested devices of the
+same model, yielding classification rates of 100% and 99.8% for the first two models and 63% for the third model(Figure
+13).
+
+Fig. 13. An ensemble involving the device’s internal structure, key position, and two microphones creates a system necessitating
+transfer function estimation. The key classification relies on these derived transfer functions.[66].
+
+4.3.3 Phase Shifts and the Doppler Effect. As shown in the 12, the study by Lu et al. [47] explores the reduction of
+acoustic signal strength, demonstrating that a user’s typing fingers can be pinpointed by assessing the attenuation
+of acoustic signals captured by smartphone microphones. This attenuation is then harnessed to localize individual
+keystrokes and subsequently assess discrepancies arising from background noise. To enhance the precision of keystroke
+localization, KeyListener additionally monitors finger movements during input through phase shifts and the Doppler
+effect, which aids in mitigating errors linked to the acoustic signal attenuation-based localization technique. Moreover,
+the application incorporates a binary tree-based search strategy to deduce keystrokes contextually. This approach
+achieves a near 90% accuracy in inferring the correct keystroke among the top 5 candidates, accompanied by a top-5
+error rate of approximately 6%.
+5
+
+POST PROCESSING TECHNOLOGIES
+
+This section outlines methods commonly reliant on language models to improve keystroke identification quality. These
+methods contribute to the enhancement of word or sentence recognition rates. In fact, this method is used to filter
+incorrect classified characters to improve the recognition rate [70].
+5.1
+
+Hidden Markov Models (HMMs)
+
+Hidden Markov Models (HMMs) are a type of machine learning model. HMMs is a statistical model used for modeling
+systems with hidden states that generate observable outcomes [9, 48]. In Fact, Hidden Markov models are engineered
+to handle data that can be represented as a ‘sequence’ of observations over time. They have applications in various
+fields, including speech recognition, natural language processing, bioinformatics, and more. HMMs are used to model
+data sequences, where the underlying process is assumed to be a Markov process with hidden states that influence
+the observed data [57]. In the scenario of an acoustic side-channel attack on a keyboard, an HMM is a model that
+undergoes training using a collection of text to anticipate the probable word or character at specific positions within a
+sequence. For example, if the result of an identification method is ‘clasc’, a HMM could be used to infer that ‘c’ was, in
+Manuscript submitted to ACM
+
+14
+
+Alireza Taheritajar et al.
+
+fact, a falsely classified ‘s’ [32]. In the work by Zhuang et al. [80], the authors employ a variant of the Viterbi algorithm
+tailored for second-order HMMs, resembling the approach outlined in Thede et al. [68]. They have demonstrated that
+the language model correction greatly enhances the correct recovery rate for words. Additionally, they utilize the HMM
+in an unsupervised manner for keyboard key recognition. This approach achieves an average recovery rate of 87.6% for
+words and 95.7% for characters.
+5.2
+
+Spelling Checker
+
+Utilizing a spell checker represents a straightforward method to capitalize on language-related insights. In the study by
+Zhuang et al. [80], they employed the Aspell [7] spell check tool on identified text, and observed specific enhancements.
+Nevertheless, standard spell checkers have restrictions regarding the types of spelling errors they can address (for
+instance, a maximum of two incorrect letters in a word). Their functionality is optimized for typical errors made by
+human typists rather than the errors made by acoustic emanation classifiers. Hence, their effectiveness in this context
+is understandably restricted.
+5.3
+
+N-GRAM Language Model
+
+The spelling correction approach discussed earlier doesn’t consider word frequency relationships or grammatical
+concerns. For instance, certain words are more prevalent than others, and there are established rules for constructing
+sentences. The spelling correction process might approve "Ir fact" as accurate because "Ir" is a recognized word, even if
+the intended phrase is likely "In fact" [80]. A potential solution involves employing an n-gram language model that
+probabilistically represents word frequency and the associations between neighboring words [35]. To be precise, in [80],
+trigrams are integrated with the aforementioned spelling correction technique, and sentences are structured using a
+graphical model.
+6
+
+METHODS AND RESULTS COMPARISON
+
+In this survey, we have delved into the feasibility and mechanics of acoustic side-channel attacks on keyboards, which
+stem from the sounds and vibrations generated during the act of typing. We explored the distinctive sounds produced
+by various keys, underpinned by the physics of keyboards and the diverse typing styles of users.
+Throughout our analysis, we have highlighted the practicality of these attack scenarios, demonstrating that attackers
+can exploit not only physical proximity but also remote and indirect methods to record keystroke sounds. This poses a
+significant threat to the security and privacy of users, as attackers can capture sensitive information without direct
+physical access to the victim’s device.
+We conducted a thorough analysis of different methods used to launch acoustic side-channel attacks on keyboards.
+The presented comparison tables offer insights into the landscape of both timing-based and geometry-based attack
+strategies (Table 1), as well as signal processing, classical machine learning-based, and deep learning-based approaches
+(Table 2). We evaluated key features and performance metrics across various categories to gain insights into the
+diverse strategies used by researchers in this field. It is evident that the choice of methodology and key features greatly
+influences the accuracy of these attacks, with some achieving remarkably high success rates. However, each approach
+also comes with its own set of limitations, such as dependencies on typing style, keyboard models, environmental noise,
+and the need for sizable training datasets. These are the typical constraints that generally affect most methods at their
+core:
+Manuscript submitted to ACM
+
+A Survey on Acoustic Side Channel Attacks on Keyboards
+
+15
+
+• Typing Style Dependency: Regardless of the approach, the accuracy of acoustic side-channel attacks is
+inherently tied to the typing style of the user, making it challenging to generalize across different users.
+• Keyboard Model Dependency: All approaches exhibit a degree of dependency on the specific keyboard model
+being used, limiting their applicability to various keyboard types.
+• Environmental Noise Sensitivity: The presence of environmental noise can significantly impact the accuracy
+of these attacks, posing a common challenge across methodologies.
+• Training Data Requirements: Many of these methods require substantial training datasets, which may not
+always be readily available or feasible to collect.
+The timing-based analysis involves using a range of techniques, such as hidden Markov models, cross-correlation, and
+distance metrics, to identify patterns. Usually, there are common limitations to these techniques, such as typing errors,
+ecological validity, and handling multiple identical time intervals. Geometry-based approaches introduce innovative
+techniques like Time Difference of Arrival (TDOA) and acoustic triangulation, demonstrating commendable keystroke
+recovery rates, albeit with some restrictions regarding precise key positioning and acoustic signal source angles.
+Signal processing methods, classical machine learning, and deep learning-based approaches emphasize the significance
+of feature extraction, including FFT coefficients, MFCC features, and spectrograms. While classical machine learning
+models like hidden Markov models and support vector machines exhibit robust performance, deep learning models,
+such as convolutional and recurrent neural networks, achieve promising accuracy rates, often surpassing 90% in certain
+situations. Furthermore, the limitations associated with each technique, such as ecological validity and recognition
+accuracy, should be carefully considered in real-world scenarios.
+This survey equips researchers, practitioners, and security experts with a comprehensive understanding of the
+current state of acoustic side-channel attacks on keyboards. By illuminating the strengths, weaknesses, and potential
+challenges posed by these approaches, we aim to encourage further research and innovation in the realm of keyboard
+security. As the digital landscape continues to evolve, safeguarding against acoustic side-channel attacks remains a
+critical endeavor, and this survey serves as a resource in that pursuit.
+
+Manuscript submitted to ACM
+
+16
+
+Alireza Taheritajar et al.
+
+[54]
+
+[46]
+
+Geometry-based approaches
+
+[79]
+[59]
+[44]
+[16]
+[25]
+
+[58]
+[8]
+
+Key Features
+Accuracy
+The time interval be- search space is retween keystrokes
+duced by at least
+two orders of magnitude
+CrossInter-keystroke tim- top-3, top-10, topcorrelation
+ing dictionary built 25, top-50, top-100 =
+from a human cog- 75%, 80%, 81%, 83%,
+nitive model
+88%
+CrossHold time, release 60% chance to reCorrelation
+time, and time cover the PIN key
+interval between
+keystrokes
+Cosine simi- Inter-keystroke tim- guessing the correct
+larity
+ing dictionary
+PIN is above 10%.
+recover 72.2% of
+Keystrokes
+86% accuracy
+
+[66]
+
+recover 94% of
+keystrokes
+a 45.2%success rate
+Acoustic Signal
+
+[45]
+
+Methodology
+Hidden
+Markov
+Model
+
+Time Difference of
+Arrival
+
+Cite
+[26]
+
+Acoustic
+Triangulation
+
+Timing-based Analysis
+
+Approach
+
+80%accuracy
+
+Limitations
+Attack Target Data
+Multiple of the same time in- ATM and door keytervals
+pads
+
+Typing styles, Typing errors,
+Ecological validity
+
+PIN
+
+The size of the training dataset
+
+4–6 digit random
+PIN
+
+Typing styles, Typing errors,
+Ecological validity
+Angle of Smartphones(sound
+recorder)
+number of sound recorder devices
+the sampling rate, Microphone Placement
+Microphone’s
+Placement,
+Word length
+cannot make precise judgments on the positions of close
+keys
+Microphone resolution
+keyboard model
+
+PIN
+
+87.5% accuracy
+correctly identify
+91.2% of keystrokes
+with 10-fold crossvalidation
+A classification rate Non-audible Pin pads
+of 99.8%.
+
+Keyboard
+Keyboard
+Keyboard
+Keyboard
+Keyboard
+
+ATM keypad
+keyboard text
+
+Differential
+PIN pads
+Audio Analysis
+[47] Phase Shifts
+90% on a top-5
+Microphone’s placement
+keyboards of touch
+and
+the
+screen
+Doppler Effect
+Table 1. Comparison of Timing-Based and Geometry-Based Acoustic Side Channel Attack Approaches on Keyboards
+
+Manuscript submitted to ACM
+
+Appr.
+
+Cite
+
+Methodology
+
+Signal Processing
+
+A Survey on Acoustic Side Channel Attacks on Keyboards
+
+[55]
+
+[80]
+[73]
+
+Classical Machine Learning-based
+
+[72]
+
+[2]
+
+[56]
+
+Limitations
+
+Distance Metric Ap- FFT and raw audio signals
+proach
+
+60%
+rate
+
+Typing styles,
+model changing
+
+Hidden
+Model
+K-means
+
+96%, 90%, 80%
+
+cepstrum features
+
+coefficients of the Melfrequency Cepstrum
+Support Vector Ma- Blind Source Separation (BSS)
+chines
+and Independent Component
+Analysis (ICA), and MFCC features
+Logistic Regression, FFT coefficients and MFCC
+Random Forest, Linear Nearest Neighbor Search
+Support
+Vector spectrum features
+Machines anomaly
+detection and Back
+Propagation Neural
+Network
+
+[30]
+
+Time-frequency de- MFCC features
+coding
+
+[6]
+[10]
+
+JavaNNS neural net- time-FFT
+work
+Cross-correlation
+FFT Coefficients
+
+[19]
+
+Logistic Regression
+
+[14]
+[32]
+[27]
+Deep Learning-based
+
+Accuracy
+
+Markov
+
+Key Features
+
+[1]
+[70]
+[36]
+
+[64]
+
+[50]
+
+17
+
+recognition
+
+90%
+
+Attack Target Data
+
+Keyboard
+
+Password
+
+Constraints of English lan- English text and random passguage
+words on keyboard
+Typing speed, Ambient noise keyboard text
+
+78.4% recognition
+accuracy
+
+Microphone’s placement
+
+Two combined keystrokes
+
+accuracy of 74.33%
+
+Noisy Audio Signals
+
+Random passwords, PINs
+
+99.47% keystroke
+detection rate, a
+97.27% recognition
+accuracy and 84.55%
+content recovery
+accuracy
+detecting correctly
+the typed key is 64%
+per character
+recognized
+correctly 79% of clicks
+90% of finding the
+correct word
+
+Combined keys
+
+keyboard text
+
+Typing style
+
+Random passwords
+
+Silent keyboards, touchscreen ATM keypads
+or touchstream
+Sound duration, word length, 7-13 characters from typing on
+repeated characters, Shift a keyboard
+keys, punctuation marks and
+digits
+Typing style and keyboard random key pressed on keymodel
+board
+keyboard model
+random key pressed on keyboard
+typing style and randomized laptop keyboard
+passwords
+Microphone’s placement, and Keyboard
+keyboard models
+
+Mel-frequency cepstral coeffi- top-5 accuracy of
+cients (MFCC)
+91.7%
+Logistic Regression MFCC
+top-5 accuracy of
+91.7%
+Self-attention trans- Mel-Spectrograms
+95% accuracy
+former
+Convolutional and Cepstrum
+ability to detect
+recurrent neural
+41.8% of keystrokes
+networks
+and 27% of words
+Vision transformer Spectrogram
+92.44% accuracy
+The number of samples
+based (ConvMix)
+Neural Networks
+MFCC coeficients
+success rate of 84% Hidden
+Markov FFT and Cepstrum
+81.47%
+lack of publically dataset
+Model and neural
+network newpnn()
+and Spellchecker
+Recurrent neural FFT
+92.60%
+keyboard Model, Environmennetwork
+tal noise and microphone
+placement
+Multi-layer percep- Spectrogram
+72.3% success rate
+Size of the spectrogram matrix
+tron
+
+Passwords
+Enigma keyboard
+Keystroke sequence
+
+Keyboard text
+
+Keyboard
+
+Table 2. Comparison of Frequency-Based Acoustic Side Channel Attack Approaches on Keyboards
+
+Manuscript submitted to ACM
+
+18
+
+Alireza Taheritajar et al.
+
+REFERENCES
+[1]
+
+Alex Akinbi et al. “Password-Sniffing Acoustic Keylogger Using Machine Learning”. In: Available at SSRN 4431909
+().
+
+[2]
+
+S Abhishek Anand and Nitesh Saxena. “Keyboard emanations in remote voice calls: Password leakage and noise
+(less) masking defenses”. In: Proceedings of the Eighth ACM Conference on Data and Application Security and
+Privacy. 2018, pp. 103–110.
+
+[3]
+
+S Abhishek Anand, Prakash Shrestha, and Nitesh Saxena. “Bad sounds good sounds: Attacking and defending
+tap-based rhythmic passwords using acoustic signals”. In: International Conference on Cryptology and Network
+Security. Springer. 2015, pp. 95–110.
+
+[4]
+
+Sebastian Angel, Sampath Kannan, and Zachary Ratliff. “Private resource allocators and their applications”. In:
+2020 IEEE Symposium on Security and Privacy (SP). IEEE. 2020, pp. 372–391.
+
+[5]
+
+C Ashokkumar, Ravi Prakash Giri, and Bernard Menezes. “Highly efficient algorithms for AES key retrieval
+in cache access attacks”. In: 2016 IEEE European symposium on security and privacy (EuroS&P). IEEE. 2016,
+pp. 261–275.
+
+[6]
+
+Dmitri Asonov and Rakesh Agrawal. “Keyboard acoustic emanations”. In: IEEE Symposium on Security and
+
+[7]
+
+Kevin Atkinson. “Aspell. 2005.
+
+[8]
+
+Jia-Xuan Bai, Bin Liu, and Luchuan Song. “I Know Your Keyboard Input: A Robust Keystroke Eavesdropper Based-
+
+Privacy, 2004. Proceedings. 2004. IEEE. 2004, pp. 3–11.
+
+on Acoustic Signals”. In: Proceedings of the 29th ACM International Conference on Multimedia. 2021, pp. 1239–
+1247.
+[9]
+
+Leonard E Baum and Ted Petrie. “Statistical inference for probabilistic functions of finite state Markov chains”.
+In: The annals of mathematical statistics 37.6 (1966), pp. 1554–1563.
+
+[10]
+
+Yigael Berger, Avishai Wool, and Arie Yeredor. “Dictionary attacks using keyboard acoustic emanations”. In:
+Proceedings of the 13th ACM conference on Computer and communications security. 2006, pp. 245–254.
+
+[11]
+
+David Brumley and Dan Boneh. “Remote timing attacks are practical”. In: Computer Networks 48.5 (2005), pp. 701–
+716.
+
+[12]
+
+Howard A Canistraro and Eric H Jordan. “Projectile-impact-location determination: an acoustic triangulation
+method”. In: Measurement Science and Technology 7.12 (1996), p. 1755.
+
+[13]
+
+Matteo Cardaioli et al. “Your PIN sounds good! on the feasibility of PIN inference through audio leakage”. In:
+arXiv preprint arXiv:1905.08742 (2019).
+
+[14]
+
+Stefano Cecconello et al. “Skype & type: Keyboard eavesdropping in voice-over-IP”. In: ACM Transactions on
+Privacy and Security (TOPS) 22.4 (2019), pp. 1–34.
+
+[15]
+
+Shuo Chen et al. “Side-channel leaks in web applications: A reality today, a challenge tomorrow”. In: 2010 IEEE
+Symposium on Security and Privacy. IEEE. 2010, pp. 191–206.
+
+[16]
+
+Kefei Cheng et al. “Dictionary Attacks based on TDOA Using a Smartphone”. In: 2022 IEEE 6th Advanced
+Information Technology, Electronic and Automation Control Conference (IAEAC). IEEE. 2022, pp. 154–159.
+
+[17]
+
+Peng Cheng. Acoustic-channel attack and defence methods for personal voice assistants. Lancaster University
+(United Kingdom), 2020.
+
+[18]
+
+Peng Cheng et al. “SonarSnoop: Active acoustic side-channel attacks”. In: International Journal of Information
+Security 19.2 (2020), pp. 213–228.
+
+Manuscript submitted to ACM
+
+A Survey on Acoustic Side Channel Attacks on Keyboards
+
+[19]
+
+19
+
+Alberto Compagno et al. “Don’t skype & type! acoustic eavesdropping in voice-over-ip”. In: Proceedings of the
+2017 ACM on Asia Conference on Computer and Communications Security. 2017, pp. 703–715.
+
+[20]
+
+Anupam Das, Nikita Borisov, and Matthew Caesar. “Do you hear what I hear? Fingerprinting smart devices
+through embedded acoustic components”. In: Proceedings of the 2014 ACM SIGSAC Conference on Computer and
+Communications Security. 2014, pp. 441–452.
+
+[21]
+
+Debayan Das et al. “X-DeepSCA: Cross-device deep learning side channel attack”. In: Proceedings of the 56th
+Annual Design Automation Conference 2019. 2019, pp. 1–6.
+
+[22]
+
+Samuel Ellis. “Predicting Keystrokes using an Audio Side-Channel Attack and Machine Learning”. In: ().
+
+[23]
+
+Song Fang et al. “No training hurdles: Fast training-agnostic attacks to infer your typing”. In: Proceedings of the
+2018 ACM SIGSAC Conference on Computer and Communications Security. 2018, pp. 1747–1760.
+
+[24]
+
+Julie Ferrigno and M Hlaváč. “When AES blinks: introducing optical side channel”. In: IET Information Security
+2.3 (2008), pp. 94–98.
+
+[25]
+
+Au Hiu Yan Fiona. “Keyboard acoustic triangulation attack”. In: The Chinese University Of Hong Kong: bachelors
+thesis (2006).
+
+[26]
+
+Denis Foo Kune and Yongdae Kim. “Timing attacks on pin input devices”. In: Proceedings of the 17th ACM
+conference on Computer and communications security. 2010, pp. 678–680.
+
+[27]
+
+Tyler Giallanza et al. “Keyboard snooping from mobile phone arrays with mixed convolutional and recurrent
+neural networks”. In: Proceedings of the ACM on Interactive, Mobile, Wearable and Ubiquitous Technologies 3.2
+(2019), pp. 1–22.
+
+[28]
+
+Anupam Golder et al. “Practical approaches toward deep-learning-based cross-device power side-channel attack”.
+In: IEEE Transactions on Very Large Scale Integration (VLSI) Systems 27.12 (2019), pp. 2720–2733.
+
+[29]
+
+Haritabh Gupta et al. “Deciphering text from touchscreen key taps”. In: IFIP Annual Conference on Data and
+Applications Security and Privacy. Springer. 2016, pp. 3–18.
+
+[30]
+
+Tzipora Halevi and Nitesh Saxena. “A closer look at keyboard acoustic emanations: random passwords, typing
+styles and decoding techniques”. In: Proceedings of the 7th ACM Symposium on Information, Computer and
+Communications Security. 2012, pp. 89–90.
+
+[31]
+
+Tzipora Halevi and Nitesh Saxena. “Keyboard acoustic side channel attacks: exploring realistic and securitysensitive scenarios”. In: International Journal of Information Security 14.5 (2015), pp. 443–456.
+
+[32]
+
+Joshua Harrison, Ehsan Toreini, and Maryam Mehrnezhad. “A Practical Deep Learning-Based Acoustic Side
+Channel Attack on Keyboards”. In: 2023 IEEE European Symposium on Security and Privacy Workshops (EuroS&PW).
+IEEE. 2023, pp. 270–280.
+
+[33]
+
+Mehmet Sinan Inci et al. “Cache attacks enable bulk key recovery on the cloud”. In: International Conference on
+Cryptographic Hardware and Embedded Systems. Springer. 2016, pp. 368–388.
+
+[34]
+
+Gorka Irazoqui et al. “Wait a minute! A fast, Cross-VM attack on AES”. In: International Workshop on Recent
+Advances in Intrusion Detection. Springer. 2014, pp. 299–319.
+
+[35]
+
+Dan Jurafsky. “Probabilistic modeling in psycholinguistics: Linguistic comprehension and production”. In:
+Probabilistic linguistics 21 (2003), pp. 1–30.
+
+[36]
+
+Andrew Kelly. “Cracking passwords using keyboard acoustics and language modeling”. In: University of Edinburgh,
+http://citeseerx. ist. psu. edu/viewdoc/download (2010), p. 54.
+
+[37]
+
+Hyosu Kim, Byunggill Joe, and Yunxin Liu. “Tapsnoop: Leveraging tap sounds to infer tapstrokes on touchscreen
+devices”. In: IEEE Access 8 (2020), pp. 14737–14748.
+Manuscript submitted to ACM
+
+20
+
+[38]
+
+Alireza Taheritajar et al.
+Paul Kocher et al. “Spectre attacks: Exploiting speculative execution”. In: Communications of the ACM 63.7 (2020),
+pp. 93–101.
+
+[39]
+
+Paul C Kocher. “Timing attacks on implementations of Diffie-Hellman, RSA, DSS, and other systems”. In: Annual
+
+[40]
+
+Eduard Kovacs. “Security Week.“”. In: Hard drive LED allows data theft from air-gapped PCs (2015).
+
+[41]
+
+Butler W Lampson. “A note on the confinement problem”. In: Communications of the ACM 16.10 (1973), pp. 613–
+
+International Cryptology Conference. Springer. 1996, pp. 104–113.
+
+615.
+[42]
+
+Liran Lerman, Gianluca Bontempi, Olivier Markowitch, et al. “Power analysis attack: an approach based on
+machine learning.” In: Int. J. Appl. Cryptogr. 3.2 (2014), pp. 97–115.
+
+[43]
+
+Moritz Lipp et al. “Meltdown: Reading Kernel Memory from User Space”. In: 27th USENIX Security Symposium
+(USENIX Security 18). 2018.
+
+[44]
+
+Jian Liu et al. “Snooping keystrokes with mm-level audio ranging on a single phone”. In: Proceedings of the 21st
+
+[45]
+
+Ximing LIU. “When keystroke meets password: Attacks and defenses”. In: (2019).
+
+[46]
+
+Ximing Liu et al. “When human cognitive modeling meets PINs: User-independent inter-keystroke timing
+
+Annual International Conference on Mobile Computing and Networking. 2015, pp. 142–154.
+
+attacks”. In: Computers & Security 80 (2019), pp. 90–107.
+[47]
+
+Li Lu et al. “Keylistener: Inferring keystrokes on qwerty keyboard of touch screen through acoustic signals”. In:
+IEEE INFOCOM 2019-IEEE Conference on Computer Communications. IEEE. 2019, pp. 775–783.
+
+[48]
+
+Hoda Maleki et al. “Markov Modeling of Moving Target Defense Games”. In: Proceedings of the 2016 ACM
+Workshop on Moving Target Defense. MTD ’16. Vienna, Austria: Association for Computing Machinery, 2016,
+pp. 81–92. isbn: 9781450345705. doi: 10.1145/2995272.2995273. url: https://doi.org/10.1145/2995272.2995273.
+
+[49]
+
+Diogo Marques et al. “Snooping on mobile phones: Prevalence and trends”. In: Twelfth Symposium on Usable
+Privacy and Security (SOUPS 2016). Vol. 2. USENIX Association. 2016, p. 77.
+
+[50]
+
+Zdenek Martinasek, Vlastimil Clupek, and Krisztina Trasy. “Acoustic attack on keyboard using spectrogram and
+neural network”. In: 2015 38th International Conference on Telecommunications and Signal Processing (TSP). IEEE.
+2015, pp. 637–641.
+
+[51]
+
+John V Monaco. “Sok: Keylogging side channels”. In: 2018 IEEE Symposium on Security and Privacy (SP). IEEE.
+2018, pp. 211–228.
+
+[52]
+
+Sashank Narain, Amirali Sanatinia, and Guevara Noubir. “Single-stroke language-agnostic keylogging using
+stereo-microphones and domain specific machine learning”. In: Proceedings of the 2014 ACM conference on Security
+and privacy in wireless & mobile networks. 2014, pp. 201–212.
+
+[53]
+
+Gavin Neale et al. “Investigating the Feasibility of Keyboard Acoustic Attacks”. In: Department of Computer
+Science—University of Auckland, https://www. cs. auckland. ac. nz/courses/compsci725s2c/archive/termpapers/gneale.
+pdf (2006), p. 12.
+
+[54]
+
+Sourav Panda et al. “Behavioral acoustic emanations: Attack and verification of pin entry using keypress sounds”.
+
+[55]
+
+Sravanthi Ponnam. Keyboard Acoustic Emanations Attack: An Empirical study. 2013.
+
+[56]
+
+Zhenquan Qin et al. “LOL: localization-free online keystroke tracking using acoustic signals”. In: Soft Computing
+
+In: Sensors 20.11 (2020), p. 3015.
+
+23.21 (2019), pp. 11063–11075.
+[57]
+
+Lawrence R Rabiner. “A tutorial on hidden Markov models and selected applications in speech recognition”. In:
+Proceedings of the IEEE 77.2 (1989), pp. 257–286.
+
+Manuscript submitted to ACM
+
+A Survey on Acoustic Side Channel Attacks on Keyboards
+
+21
+
+[58]
+
+Vinayak Ranade, Jeremy Smith, and Ben Switala. Acoustic side channel attack on atm keypads. 2009.
+
+[59]
+
+Yusep Rosmansyah et al. “The microphone array sensor attack on keyboard acoustic emanations: Side-channel
+attack”. In: 2017 International Conference on Information Technology Systems and Innovation (ICITSI). IEEE. 2017,
+pp. 261–266.
+
+[60]
+
+Mohd Sabra, Anindya Maiti, and Murtuza Jadliwala. “Zoom on the keystrokes: exploiting video calls for keystroke
+inference attacks”. In: arXiv preprint arXiv:2010.12078 (2020).
+
+[61]
+
+Roman Schlegel et al. “Soundcomber: A Stealthy and Context-Aware Sound Trojan for Smartphones.” In: NDSS.
+Vol. 11. 2011, pp. 17–33.
+
+[62]
+
+Ilia Shumailov et al. “Hearing your touch: A new acoustic side channel on smartphones”. In: arXiv preprint
+arXiv:1903.11137 (2019).
+
+[63]
+
+Laurent Simon and Ross Anderson. “Pin skimmer: inferring pins through the camera and microphone”. In:
+Proceedings of the Third ACM workshop on Security and privacy in smartphones & mobile devices. 2013, pp. 67–78.
+
+[64]
+
+David Slater et al. “Robust keystroke transcription from the acoustic side-channel”. In: Proceedings of the 35th
+Annual Computer Security Applications Conference. 2019, pp. 776–787.
+
+[65]
+
+Dawn Xiaodong Song, David Wagner, and Xuqing Tian. “Timing Analysis of Keystrokes and Timing Attacks on
+{SSH}”. In: 10th USENIX Security Symposium (USENIX Security 01). 2001.
+
+[66]
+
+Gerson de Souza Faria and Hae Yong Kim. “Differential audio analysis: a new side-channel attack on PIN pads”.
+In: International Journal of Information Security 18.1 (2019), pp. 73–84.
+
+[67]
+
+Gerson de Souza Faria and Hae Yong Kim. “Identification of Pressed Keys by Acoustic Transfer Function.” In:
+SMC. 2015, pp. 240–245.
+
+[68]
+
+Scott M Thede and Mary Harper. “A second-order hidden Markov model for part-of-speech tagging”. In: Proceedings of the 37th annual meeting of the Association for Computational Linguistics. 1999, pp. 175–182.
+
+[69]
+
+Benjamin Timon. “Non-profiled deep learning-based side-channel attacks with sensitivity analysis”. In: IACR
+Transactions on Cryptographic Hardware and Embedded Systems (2019), pp. 107–131.
+
+[70]
+
+Ehsan Toreini, Brian Randell, and Feng Hao. “An acoustic side channel attack on enigma”. In: School of Computing
+Science Technical Report Series (2015).
+
+[71]
+
+Wim Van Eck. “Electromagnetic radiation from video display units: An eavesdropping risk?” In: Computers &
+Security 4.4 (1985), pp. 269–286.
+
+[72]
+
+Jian Wang et al. “Accurate combined keystrokes detection using acoustic signals”. In: 2016 12th International
+
+[73]
+
+Esan Wit and Thijs Houtenbos. “All your keystrokes are belong to us”. In: (2014).
+
+[74]
+
+Jacob Otto Wobbrock. “Tapsongs: tapping rhythm-based passwords on a single binary sensor”. In: Proceedings of
+
+Conference on Mobile Ad-Hoc and Sensor Networks (MSN). IEEE. 2016, pp. 9–14.
+
+the 22nd annual ACM symposium on User interface software and technology. 2009, pp. 93–96.
+[75]
+
+Yuval Yarom and Katrina Falkner. “{FLUSH+ RELOAD}: A High Resolution, Low Noise, L3 Cache {Side-Channel}
+Attack”. In: 23rd USENIX security symposium (USENIX security 14). 2014, pp. 719–732.
+
+[76]
+
+Jiadi Yu et al. “An indirect eavesdropping attack of keystrokes on touch screen through acoustic sensing”. In:
+IEEE Transactions on Mobile Computing 20.2 (2019), pp. 337–351.
+
+[77]
+
+Almos Zarandy, Ilia Shumailov, and Ross Anderson. “Hey Alexa what did I just type? Decoding smartphone
+sounds with a voice assistant”. In: arXiv preprint arXiv:2012.00687 (2020).
+
+[78]
+
+Man Zhou et al. “Patternlistener: Cracking android pattern lock using acoustic signals”. In: Proceedings of the
+2018 ACM SIGSAC Conference on Computer and Communications Security. 2018, pp. 1775–1787.
+Manuscript submitted to ACM
+
+22
+
+[79]
+
+Alireza Taheritajar et al.
+Tong Zhu et al. “Context-free attacks using keyboard acoustic emanations”. In: Proceedings of the 2014 ACM
+SIGSAC conference on computer and communications security. 2014, pp. 453–464.
+
+[80]
+
+Li Zhuang, Feng Zhou, and J Doug Tygar. “Keyboard acoustic emanations revisited”. In: ACM Transactions on
+Information and System Security (TISSEC) 13.1 (2009), pp. 1–26.
+
+Manuscript submitted to ACM
+
+

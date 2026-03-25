@@ -1,0 +1,1293 @@
+I MPROVING ACOUSTIC S IDE -C HANNEL ATTACKS ON K EYBOARDS
+U SING T RANSFORMERS AND L ARGE L ANGUAGE M ODELS
+
+arXiv:2502.09782v1 [cs.LG] 13 Feb 2025
+
+Jin Hyun Park*
+Dept. of Computer Science and Engineering
+Texas A&M University, College Station
+Texas, USA
+jinhyun.park@tamu.edu
+
+Seyyed Ali Ayati*
+Dept. of Computer Science and Engineering
+Texas A&M University, College Station
+Texas, USA
+seyyedaliayati@tamu.edu
+
+Yichen Cai
+Dept. of Computer Science
+University of Toronto, Toronto
+Ontario, Canada
+yichen@cs.toronto.edu
+
+A BSTRACT
+The increasing prevalence of microphones in everyday devices and the growing reliance on online services
+have amplified the risk of acoustic side-channel attacks (ASCAs) targeting keyboards. This study explores
+cutting-edge deep learning techniques, specifically vision transformers (VTs) and large language models
+(LLMs), to advance the effectiveness and applicability of such attacks in real-world scenarios. We present
+substantial improvements over prior research in this domain. By leveraging the CoAtNet model and using
+the same dataset from prior research, our CoAtNet achieves state-of-the-art performance, showing a notable
+improvement of 5.0% for keystrokes recorded via smartphone (Phone) and 5.9% for those recorded via
+Zoom compared to the previous benchmarks. Beyond these performance improvements achieved with the
+Convolutional Neural Network (CNN) model, CoAtNet, we shift our focus to evaluating the effectiveness
+of transformer architectures and language models. We demonstrate that leading VT models can achieve
+comparable accuracy, with the best VT model achieving a notable improvement of 5.0% and 5.9% on the
+Phone and Zoom datasets, respectively. Importantly, we address a critical limitation of previous studies by
+introducing a robust noise mitigation method for real-world scenarios. Specifically, we utilize LLMs for
+contextual understanding, enabling the detection and correction of erroneous or unseen keyboard strokes
+in noisy environments. We showed that the language model significantly enhances performance in ASCA
+tasks by detecting and correcting erroneously classified keystrokes. Furthermore, we demonstrate that finetuned lightweight language models with Low-Rank Adaptation (LoRA) show comparable performance with
+heavyweight language models that have 67X more parameters. This integration of VTs and LLMs substantially
+improves the practical applicability of our approach, representing the first application of these technologies to
+address ASCAs and error mitigation in real-world scenarios.
+
+* The first and second authors contributed equally.
+
+1
+
+INTRODUCTION
+
+Acoustic side-channel attacks (ASCAs) exploit sound-based
+emanations from devices to infer sensitive information, such as
+keystrokes, without direct access to the target system. These
+attacks pose significant threats to modern cybersecurity, particularly as microphones in consumer electronics become more
+
+ubiquitous and sensitive. The ability to classify keystrokes
+based solely on their acoustic signatures has wide-reaching implications for data security and privacy, highlighting the urgent
+need to develop both robust detection systems and effective
+countermeasures.
+Over the years, the techniques for ASCAs have evolved
+from simple signal processing methods to sophisticated deeplearning models capable of achieving high classification accuracy. Early works in this domain explored keystroke iden-
+
+tification using traditional machine learning algorithms, but
+they were often limited by their inability to perform well in
+noisy, real-world environments. Recent advancements in deep
+learning, such as the CoAtNet model, have demonstrated significant improvements in keystroke classification accuracy by
+leveraging hierarchical architectures that integrate CNNs with
+attention. However, these methods still face challenges in noisy
+environments and require further enhancements to ensure practical applicability.
+
+and enhance PIN inference [14]. Furthermore, post-processing
+techniques, such as n-gram language models and spelling correction, have been used to recover coherent text sequences [33].
+Despite these advancements, traditional methodologies are often constrained to limited datasets, such as PIN inputs, and lack
+robustness when generalizing to full keyboard text recovery
+scenarios [27].
+Traditional machine learning algorithms also have significantly
+enhanced the effectiveness of ASCAs by improving keystroke
+recognition accuracy. For instance, [33] used HMMs combined with cepstrum features to reconstruct the text, achieving
+high recognition rates by capitalizing on the sequential structure of the typed text. Clustering methods, such as K-means,
+have been employed to group keystrokes based on acoustic
+properties, with Mel-frequency cepstrum coefficients (MFCCs)
+serving as robust features [31]. Additionally, support vector
+machines (SVMs) have been leveraged for keystroke classification, particularly when integrated with techniques like blind
+signal separation [30]. Logistic regression and random forest models have demonstrated efficacy in decoding passwords
+and PINs from acoustic signals [3]. Time-frequency decoding
+techniques have also been explored, combining time-domain
+and frequency-domain analysis to improve keystroke detection
+accuracy [16]. However, these machine-learning approaches
+face challenges, including sensitivity to diverse typing styles,
+noisy environments, and random password inputs, which can
+reduce their accuracy and real-world applicability.
+
+At the same time, vision transformers (VTs) and large language models (LLMs) have emerged as transformative tools in
+artificial intelligence, excelling in a variety of domains, including computer vision, natural language processing, and error
+correction tasks. VTs, such as ViT [13] and Swin [22], have
+revolutionized image and signal processing by modeling global
+dependencies in data, while LLMs, like GPT-3 [6] and GPT-4
+[1], have set new benchmarks in contextual understanding and
+text generation. The potential of combining these advanced
+models to enhance ASCAs remains largely untapped, offering
+an exciting opportunity to address key limitations of existing
+approaches.
+In this paper, we introduce a novel framework that leverages
+VTs and LLMs to advance ASCAs on keyboards. Our contributions are threefold: (1) We achieve state-of-the-art keystroke
+classification accuracy by utilizing VTs alongside the CoAtNet
+model, demonstrating their efficacy in processing acoustic data;
+(2) We introduce a robust noise mitigation strategy using LLMs
+to detect and correct errors in noisy environments, addressing
+a critical gap in prior research; and (3) We demonstrate that
+significantly smaller fine-tuned LLMs can achieve performance
+comparable to much larger LLMs in keystroke error correcting tasks, setting a new benchmark for ASCAs in real-world
+scenarios.
+
+Recently, deep learning has emerged as a transformative tool in
+ASCAs, enabling significant improvements over traditional and
+machine learning methods. Harrison et al. employed the CoAtNet model, which integrates convolutional and self-attention
+layers, using mel-spectrograms as input to achieve classification accuracies of 95% and 93% for phone-recorded and Zoomrecorded keystrokes, respectively [17]. Similarly, another recent study utilized ConvMixer to analyze MFCC spectrograms,
+achieving a password recognition accuracy of 92.44%, surpassing CNN models such as ResNet18 and VGG16 [2]. Giallanza
+et al. demonstrated the effectiveness of combining CNNs for
+keystroke detection with recurrent neural networks (RNNs) for
+word identification, achieving 41.8% keystroke recognition and
+27% word recognition in noisy environments [15]. Toreini et al.
+applied artificial neural networks to MFCC features, achieving
+a recognition rate of 92.18% for Enigma keys [28]. Despite
+these advancements, deep learning-based methods are highly
+sensitive to environmental noise and demand substantial computational resources, underscoring the need for more adaptable
+and efficient solutions.
+
+By integrating advanced deep learning architectures with noiseresilient error correction techniques, this paper represents a
+significant step forward in the field of ASCAs. Our findings not only underscore the importance of adopting cuttingedge AI technologies to enhance ASCAs but also highlight
+the broader implications for securing sensitive data against
+emerging threats.
+
+2
+
+BACKGROUND AND RELATED WORK
+
+ASCAs exploit sound-based emanations from keyboards to infer sensitive information, presenting significant security risks in
+modern environments. Traditional approaches to ASCAs predominantly rely on statistical methods and basic machine learning techniques, offering varying degrees of success without
+employing deep learning models. For instance, cosine similarity has been effectively utilized to model inter-keystroke timing
+and infer PINs [21]. Cross-correlation methods have demonstrated their utility in analyzing behavioral acoustic emanations
+from keypress sounds [24]. Geometry-based techniques, such
+as the Time Difference of Arrival (TDoA) method, have shown
+the ability to localize keystrokes based on positional analysis [9][32]. Hidden Markov Models (HMMs) have also been
+employed, leveraging timing analysis to reduce search spaces
+
+Notably, no prior research has employed VTs or LLMs for
+keyboard ASCAs. VTs, with their self-attention mechanisms
+and capacity to model global dependencies, have transformed
+and improved image and sequence analysis [13]. Similarly,
+LLMs have set benchmarks in natural language processing
+by understanding complex linguistic structures and generating coherent outputs [6]. Therefore, we suspected integrating
+VTs and LLMs into ASCA pipelines offers immense potential.
+VTs can process spectrograms as images, capturing nuanced
+acoustic patterns with exceptional generalization capabilities.
+
+2
+
+Meanwhile, LLMs can enhance attack pipelines by providing
+contextual understanding and improving post-processing, significantly boosting the accuracy of classified text or passwords.
+The strengths of these models present promising opportunities
+to address existing limitations in ASCA methodologies.
+
+peaks for each key. This process resulted in 25 .wav files for
+each keystroke.
+After generating 25 .wav files for each keystroke, the signals
+were randomly time-shifted by up to 30% or 40% in either
+direction to enhance robustness. Next, we converted the timeshifted audio signals into images using mel-spectrograms. To
+further augment the dataset, we applied random time and frequency masking to the resulting spectrogram images. Using
+this augmented image dataset, we evaluated CoAtNet and selected VT models. See Fig. 1 for the overall data processing
+procedure and Table 1 for used hyperparameters.
+
+While LLMs demonstrate remarkable capabilities, they also
+entail inevitable drawbacks. Training and deploying LLMs
+demand substantial computational cost and time, along with
+extensive hardware and energy resources. Fine-tuning pretrained LLMs is often used to avoid the high computational cost
+of full training, but even this process can demand significant
+resources when the model is large. Lightweight fine-tuning
+techniques, such as Low-Rank Adaptation (LoRA) [18] and
+Quantized LoRA (QLoRA) [12], have emerged to mitigate
+these issues. LoRA freezes most of the model’s parameters,
+fine-tuning only a small subset, while QLoRA further reduces
+memory requirements and inference latency by quantizing the
+model. These techniques enable domain-specific adaptation of
+LLMs, making them feasible for resource-constrained ASCA
+scenarios.
+
+3.2
+
+Models
+
+We utilized CoAtNet along with five different state-of-the-art
+(SOTA) VT models – ViT [13], Swin [22], DeiT [29], CLIP
+[25], and BEiT [5] – for testing and comparison. We used
+pre-trained VT models and fine-tuned them with our data. The
+input image size for CoAtNet is 64×64, while for VT models,
+it is 224×224. Adam [20] and AdamW [23] optimizers are
+used for CoAtNet and VTs, respectively. For the CoAtNet
+model, since the previous study’s CoAtNet (we will now refer
+to it as B-CoAtNet for baseline CoAtNet) model does not
+specify the number of blocks or channel sizes, we configured
+the number of parameters to align with the smallest reported
+parameter size in [7]. Notably, unlike the other selected VTs,
+CLIP is a multimodal model, meaning it incorporates both
+vision and language embeddings for downstream tasks. In our
+experiments, we exclusively utilized the vision component of
+the CLIP model, augmenting it with a fully connected layer
+before the softmax layer.
+
+In summary, ASCAs have evolved with traditional, machine
+learning, and deep learning approaches, each contributing
+unique strengths. The absence of VTs and LLMs in ASCA
+research highlights a significant opportunity. By leveraging the
+global attention capabilities of VTs and the contextual reasoning power of LLMs, our work overcomes existing limitations
+and broadens the applicability of ASCAs in real-world scenarios. Innovations such as LoRA and QLoRA make these
+integrations both practical and effective, offering pathways to
+revolutionize acoustic attack pipelines while emphasizing the
+necessity of robust security countermeasures.
+
+Table 1 details the hyperparameters used in our experiments.
+Key distinctions compared to the base study [17] are adjustments to the time-shift percentage, hop lengths, and data split
+3 METHODOLOGY
+methodology. To test the VT models, we applied two different
+data transformation methods. The methodologies below enable
+This section is divided into four subsections. The first subseca comprehensive evaluation of the VT models under different
+tion outlines the data preprocessing steps necessary for ASCA
+preprocessing conditions.
+design. The second subsection details the models used for the
+classification task, including the tuned CoAtNet and selected
+Phone Value
+Zoom Value
+VT models for comparison. The third subsection demonstrates
+Epochs
+1100
+1100
+the application of LLMs for error detection and correction
+Batch Size
+16
+16
+in real-world scenarios. Finally, the fourth subsection illus- Loss Type
+Cross Entropy
+Cross Entropy
+trates how such error mitigation can be fulfilled using only Optimizer
+Adam (AdamW† )
+Adam (AdamW† )
+Max Learning Rate
+5e-4 (5e-5† )
+5e-4 (5e-5† )
+lightweight LLM models.
+3.1
+
+Annealing Schedule
+Timeshift Percentage
+Max Mask Percentage
+Number of Masks Per Axis
+Mel Bands
+FFT Window Size
+Hop Length
+Data Split
+
+Data Processing
+
+For the datasets, we used the same ones as the original paper
+[17], following the same pre-processing steps outlined in it.
+The datasets consist of two sources: Phone and Zoom [19].
+Data was collected for 36 different keystrokes, including letters
+(a – z) and numbers (0 – 9). Each keystroke was pressed 25
+times, and the recordings were captured using either a Phone or
+Zoom setup. To process the data, we applied the Fast Fourier
+Transform (FFT) to the recordings and summed the coefficients
+across frequencies to calculate the energy. This energy was used
+to identify the presence of a keystroke, effectively detecting 25
+
+Linear
+0.4 (0.3∗† )
+0.1 (0.03† )
+2
+64 (224† )
+1024
+225 (300∗ ) (85† )
+Random (Stratified∗† )
+
+Linear
+0.4
+0.1 (0.03† )
+2
+64 (224† )
+1024
+500 (226∗ ) (64† )
+Random (Stratified∗† )
+
+Table 1: Hyperparameters for keystroke classification experiments using Phone and Zoom recordings. ∗ indicates values
+modified in our tuned CoAtNet implementation, while † denotes values modified for the selected VT models compared to
+the B-CoAtNet.
+
+3
+
+Audio files
+
+Separate key strokes
+
+Frequency and Time Masking
+
+Time shift augmentation
+
+Classification with
+CoAtNet and Vision Transformer Models
+
+Mel-spectrogram
+
+LLMs
+
+Figure 1: Audio processing pipeline for classification. Each audio file (representing a syllable or digit) is separated into 25
+.wav files corresponding to individual keystrokes. Time-shift augmentation is applied to the audio before converting it to
+mel-spectrograms. Frequency and time masking are then performed to prepare the data for classification using CoAtNet and VT
+models.
+1. Resizing Transformation: We resized (i.e., bilinear tence, the corresponding mel-spectrogram image was adjusted
+interpolation) input images from 64×64 to 224×224 with noise using different noise factors. See Eq. 1 to see how
+to match the input size requirements of the VT models. noises are applied.
+Images were normalized, and random erasing was
+Inoisy = I + η · N (0, 1)
+(1)
+applied as a data augmentation.
+where η is a noise factor. We carefully selected noise factor
+2. Direct Transformation: Input images were generated values to ensure that the resulting accuracies for Low, Medium,
+directly at a size of 224×224 by modifying the hy- and High noise levels were approximately 95%, 85%, and 70%,
+perparameters of the mel-spectrogram. This approach respectively. The accuracy was calculated between the true
+eliminated the need for resizing. Images were normal- sentence and sentence with errors. See Eq. 2 for more details.
+ized, and time and frequency masking were applied as
+a data augmentation.
+2 · |M |
+Accuracy =
+(2)
+|S1 | + |S2 |
+3.3 Detecting and Correcting Errors with LLMs
+where:
+Detecting and correcting errors in noisy textual predictions is
+• |M |: The total number of matching characters bea critical step in enhancing the robustness of ASCA systems.
+tween the two strings S1 (the true sentence) and S2
+This section details the methodology employed to address er(the predicted sentence). Matches are determined by
+rors arising from noisy datasets by leveraging LLMs through
+optimizing the alignment of characters, not restricted
+few-shot prompting techniques. The process involves multiple
+to contiguous sequences.
+datasets, noise environments, and evaluation metrics, providing a comprehensive analysis of error correction effectiveness.
+• |S1 |: The length (number of characters) of the true
+We did not consider a noise-free environment, as it is highly
+sentence S1 .
+unlikely to encounter zero noise in real-world scenarios.
+• |S2 |: The length (number of characters) of the predicted sentence S2 .
+The original keystroke dataset from the Phone and Zoom recordings lacked space characters. To simulate real-world sentences,
+we assumed spaces existed in the dataset with the same pre- The noisy audio waveforms were processed through the
+diction accuracy as other letters and digits. To evaluate er- pipeline illustrated in Fig. 2. After generating noisy textual
+ror detection and correction, the EnglishTense dataset [4] was predictions, typographical and semantic errors were corrected
+used, containing a rich corpus of categorized English sentences. using LLMs. Few-shot prompting techniques, as outlined in TaFrom this dataset, 1,000 sentences were randomly selected: 500 ble 3, were employed. The LLM was prompted with examples
+containing digits and 500 without digits, ensuring a balanced of sentences containing typos and their corrected counterparts.
+We utilized Llama-3.2-1B, Llama-3.2-3B, Llama-3.1-8B, and
+variety of sentence structures and types.
+GPT-4o for LLM models. The system prompt established the
+role of the LLM as an expert in correcting typos, while the user
+Dataset name / Noise Factor (η) Low Medium High
+prompt included examples and the target sentence.
+Phone
+1
+1.5
+2
+An example of the error correction process is visualized in
+Zoom
+1
+5
+6
+Fig. 3. The initial text sequence represents the ideal output,
+while
+the middle layer shows errors introduced due to noise.
+Table 2: Different noise intensity levels across Phone and Zoom
+The bottom layer demonstrates the corrected output, highlightdatasets.
+ing the effectiveness of LLMs in refining noisy predictions.
+The corrected sentences were evaluated using multiple metrics
+The selected sentences were mapped to acoustic data generated to quantify performance:
+using the Phone and Zoom datasets under different noise environments, as shown in Table 2. Noise factors were categorized
+• BLEU: Measures n-gram overlap between the coras Low, Medium, and High. For each syllable or digit in a senrected sentence and the ground truth.
+4
+
+Role
+
+Content
+
+System
+
+You are an expert in correcting typos in sentences.
+
+User
+
+Here are pairs of sentences with typos; learn from them:
+1
+sentence: {Strue
+}
+1
+corrected: {Spred
+}
+2
+sentence: {Strue
+}
+2
+corrected: {Spred
+}
+
+Now, please correct these sentences and output only the corrected version with no additional text: { Starget }
+Table 3: Few-shot prompting structure for generating messages to correct typos using LLMs. The System role sets the task
+context, and the User role provides examples and a target sentence to be corrected.
+• ROUGE: Evaluates recall-based overlap of substrings.
+Sentence with corrections
+
+LLM
+
+CoAtNet
+
+Pre-Processing
+
+Sentence without corrections
+
+• METEOR: Considers synonymy and stemming in
+evaluating similarity.
+This overall simulated real-world challenges by incorporating
+environmental noise into audio recordings, reflecting practical
+applications.
+3.4
+
+We hypothesized that GPT-4o could outperform smaller models
+(Llama family) in accurately correcting typos and mistakes in
+sentences. This is because models with a high number of parameters tend to perform better than smaller models. However,
+a significant drawback is its high inference time, attributed to
+its substantial model size (∼200 billion parameters). To circumvent this issue, we propose a method to create a much smaller
+model specifically designed for this task. We used Low-Rank
+Adaptation fine-tuning methods [11] to achieve the objective
+on the smaller model. That is, instead of fine-tuning the full set
+of parameters in the model, a set of low-rank update matrices is
+introduced on top of the pre-trained weights to train the LLM
+for the error correction task. This allows task-specific learning
+without modifying the original weights, further reducing the
+computational cost and memory footprint.
+
+Figure 2: Pipeline for Detecting and Correcting Errors in
+Keystroke Predictions Using LLMs: From noisy audio waveforms to mel-spectrogram processing, keystroke classification
+via CoAtNet, and error detection/correction with LLMs, resulting in an accurate and more probable textual output.
+
+Reference
+
+they attended a music festival and danced under the starry sky
+
+CoAtNet
+Output
+
+they attwnded a 0usi2 fectivalwand dancsd under the3s5arrg sky
+
+LLM
+Output
+
+Detecting and Correcting Errors with Fine-tuned
+LLMs
+
+We took a pre-trained Llama-3.2-3B (3 billion parameters)
+model and chose the more efficient QLoRA method [8] for the
+fine-tuning task. The smaller low-rank update matrices have
+a dimension of d × c where d is the dimension of the original
+weight matrices, and c is chosen arbitrarily but satisfying d
+>> c. Training is carried out on specific training tasks where
+the predicted sentences from the audio are the input, and the
+correct output is the actual sentences being typed. To enhance
+the robustness of the model against noise, we progressively
+increase the noise level in the training data. Following Table 2,
+the training for each dataset starts with a low noise factor and
+goes up to high noise intensity, one epoch for each noise level.
+AdamW optimizer, with a learning rate of 0.0002, is used for
+
+they attended a music festival and danced under the starlit sky
+
+Figure 3: Example of Error Detection and Correction Using
+LLMs: The initial text sequence (top) represents the ideal output. The noisy prediction (middle) introduces typographical
+and semantic errors due to environmental noise or model inaccuracies. The corrected output (bottom) demonstrates how
+LLMs refine the sequence using contextual understanding, substituting errors (e.g., attwnded to attended).
+
+5
+
+Role
+
+Content
+
+System
+
+You are an expert in correcting typos in sentences.
+
+User
+
+Correct typos in the following sentence and return only the sentence: { Starget }
+
+Table 4: Zero-shot prompting structure for the fine-tuned model. The Roles are the same as in Table 3. Starget is the sentence to
+be corrected.
+fine-tuning over three epochs: the first with low, the second
+with medium, and the third with high noise sentences.
+
+for heavyweight CoAtNet configurations under ImageNet [10]
+and JFT-300M [26] datasets.
+
+We prompt the model as described in Table 4. This is different
+from the original prompting structure in Table 3 since we train
+the model on the error correction task specifically. Therefore,
+zero-shot prompting is used here. The gradient updates were
+only applied to the LoRA weights, while the original Llama
+weights were frozen. The updates can be expressed in Eq. 3.
+
+B-CoAtNet (Unknown)
+
+O-CoAtNet (∼24M)
+
+Phone: Mean and stdev
+Phone: Max
+
+95%
+
+96.45 ± 3.5%
+100%
+
+Zoom: Mean and stdev
+Zoom: Max
+
+93%
+
+96.67 ± 2.1%
+98.9%
+
+W = W0 + ∆W = W0 + AB
+
+(3) Table 5: Summary statistics for B-CoAtNet vs O-CoAtNet on
+where W is the updated weight after fine-tuning, W0 is the the Phone and Zoom datasets. For our CoAtNet, the mean
+original pre-trained weight, and ∆W is the update being ap- and standard deviation were calculated based on results from
+plied. Traditional fine-tuning directly operates on ∆W , where five different seeds. Note that B-CoAtNet only reports the best
+W, W0 , ∆W ∈ Rd×d for large d. In contrast to traditional fine- accuracy without providing standard deviations or parameter
+tuning methods, we used QLoRA to operate on weighs A, B sizes, the latter of which is marked as ‘unknown’ in the table.
+where A ∈ Rd×c , B ∈ Rc×d for a much smaller c. Instead of
+computing ∆W directly, we calculate ∆W = AB and only
+make updates on small matrices A and B.
+We also compared B-CoAtNet with selected VTs, including a
+Concluding the methodology section, our comprehensive ap- reference to the number of parameters for each model. By examproach demonstrates the robustness of the (fine-tuned) LLM- ining the results in Tables 6, we observe that VTs demonstrate
+based error detection and correction framework across diverse comparable or, in some cases, superior accuracy to B-CoAtNet.
+noise environments and datasets. The results, presented in When comparing the best accuracy between B-CoAtNet and
+the subsequent section, demonstrate the performance improve- selected VTs, the direct transformation using Swin exhibits
+ments achieved by integrating LLMs with the ASCA pipeline, the largest gap, with a 5.0% difference on the Phone dataset
+offering insights into their potential for real-world applications. and a 5.9% difference on the Zoom dataset. Considering other
+models, most demonstrate accuracy comparable to B-CoAtNet.
+However, the CLIP model exhibits significantly lower perfor4 RESULTS
+mance. We suspect this is due to CLIP being originally designed for multimodal tasks while we utilized only its vision
+This section is organized into three subsections: (1) CoAtNets component. Additionally, we did not fine-tune hyperparameters
+and VTs, (2) Mitigating errors with LLMs, and (3) Mitigating such as the learning rate, batch size, or scheduler, which likely
+errors with Fine-tuned LLMs.
+contributed to the weaker performance. We strongly believe
+that performance could be improved through hyperparameter
+optimization.
+4.1 CoAtNets and VTs
+When considering the number of parameters, VTs generally
+perform weaker than CoAtNet. This is likely due to the limited
+size of the dataset, which contains only 25 samples per syllable
+or digit. We presume that collecting a larger dataset or employing additional data augmentation techniques could significantly
+improve accuracy in VTs. Overall, our results show that VTs
+can perform on par with or even exceed CoAtNet.
+
+Using the details outlined in the methods section, we compared
+B-CoAtNet with our CoAtNet (we will now refer to it as OCoAtNet for our CoAtNet). As shown in Table 5, O-CoAtNet
+achieves higher accuracy than B-CoAtNet in terms of both
+mean and standard deviation, as well as maximum accuracy.
+For the Phone dataset, we observe a 1.5% increase in mean
+accuracy, while for the Zoom dataset, the improvement is 3.5%.
+Given that the original work reported only the best accuracy
+without providing a mean or standard deviation, the gap between the best accuracy of B-CoAtNet and O-CoAtNet is even
+more significant. We show a 5.0% increase in the Phone dataset,
+while for the Zoom dataset, the improvement is 5.9%. Given
+that we utilized the lightweight CoAtNet model, we anticipate
+that even higher accuracy could be achieved with a heavyweight model, as previous work [7] reports better performance
+
+Importantly, our objective was not merely to achieve better performance with VTs but to evaluate their potential as alternative
+models for the acoustic SCA domain. In real-world scenarios,
+noise in the environment is unavoidable, making it impractical
+to rely solely on classification accuracy from a refined dataset.
+In the next subsection, we demonstrate how LLMs can be effectively utilized in noisy environments, addressing more realistic
+conditions.
+6
+
+Resizing Transformation
+
+ViT (86M)
+
+Swin (28M)
+
+DeiT (86M)
+
+CLIP (87M)
+
+BEiT (86M)
+
+Phone: Mean and stdev
+Phone: Max
+
+94.8 ± 1.0%
+95.6%
+
+90.0 ± 7.6%
+98.9%
+
+89.3 ± 3.3%
+92.2%
+
+76.9 ± 3.8%
+81.1%
+
+95.6% ± 1.4%
+97.8%
+
+Zoom: Mean and stdev
+Zoom: Max
+
+90.4 ± 3.0%*
+94.4%
+
+85.1 ± 3.4%
+88.9%
+
+85.3 ± 2.0%
+87.8%
+
+66.2 ± 8.9%
+78.9%
+
+87.1 ± 4.1%
+92.2%
+
+Direct Transformation
+
+ViT (86M)
+
+Swin (28M)
+
+DeiT (86M)
+
+CLIP (87M)
+
+BEiT (86M)
+
+Phone: Mean and stdev
+Phone: Max
+
+94.0 ± 2.3%
+97.8%
+
+96.7 ± 2.5%
+100.0%*
+
+94.4 ± 1.4%
+95.6%
+
+84.9 ± 6.7%
+90.0%
+
+97.6 ± 1.6%*
+100.0%*
+
+Zoom: Mean and stdev
+Zoom: Max
+
+56.4 ± 48.8%
+95.6%
+
+54.7 ± 48.4%
+98.9%*
+
+22.2 ± 40.4%
+94.4%
+
+2.7 ± 0.6%
+3.3%
+
+57.3 ± 45.9%
+96.7%
+
+Table 6: Summary statistics for different transformer models on the Phone and Zoom dataset using resizing transformation and
+direct transformation. The mean and standard deviation (stdev) were calculated using results from five different seeds. Bolded
+numbers indicate the best performance in each row, while an asterisk (*) denotes the best for each dataset.
+4.2
+
+4.3
+
+Mitigating errors with LLMs
+
+Mitigating errors with Fine-tuned LLMs
+
+Utilizing the same datasets as in the previous subsection, we
+fine-tuned the weights of Llama-3.2-3B. Similar to the previous
+In this subsection, we present the experimental results demon- analysis, we evaluated the performance of the fine-tuned Llamastrating the performance of various LLM models in correcting 3.2-3B with multiple metrics as presented in Fig. 4. It clearly
+noisy text predictions across multiple noise levels and datasets. demonstrates the fine-tuned model’s strong ability to correct
+The evaluation utilized multiple metrics, including BLEU, ME- mistakes compared to other models.
+TEOR, and ROUGE scores, providing a comprehensive analyThe fine-tuned model shows consistent performance gains
+sis of the effectiveness of LLMs in improving the robustness of
+across all evaluation metrics. Compared to the pre-trained
+ASCAs. We evaluated the error mitigation capabilities of LLM
+Llama model results in Fig. 4 (also see Table 7, 8, and 9 for
+models, specifically the Llama family and GPT-4o, by varying
+accurate numbers in SM), the fine-tuned 3B model surpassed
+error rates and performance metrics.
+them by a large margin. Calculating the performance gain as the
+From Fig. 4 (See Table 7 and 8 for accurate numbers in SM), average of the percentage increases across different noise levels
+it is evident that CoAtNet performs poorly in the presence on BLEU accuracy, we found that it has a 138.52% increase
+of noise. Without error mitigation techniques, relying solely compared to the original 3B model for the phone dataset. Even
+on a classification model is inadequate. This outcome aligns compared to the 8B model, the 3B fine-tuned model is 71.09%
+with our expectations and underscores the need for LLMs to better. On the Zoom dataset, a similar level of improvement
+effectively mitigate errors. Here, we show that incorporating is observed: 86.21% increase to the original 3B and 48.86%
+LLMs for error detection and correction significantly improves increase to the 8B model.
+performance. Within the Llama family, performance improves
+The fine-tuning is especially effective at higher noise levels.
+with larger model sizes. Among all tested LLMs, GPT-4o
+For example, with the noise intensity set to High, the fineachieves the best results, particularly excelling under high noise
+tuning increased the BLEU accuracy by 4.7X and 3.1X on
+conditions.
+the phone and Zoom datasets, respectively, compared to the
+The results indicate that LLMs are highly effective in detecting original 3B model without fine-tuning. Its effect is not as
+and correcting errors caused by noise in ASCA applications. evident at Low noise intensity as they are already close to 1.
+GPT-4o, in particular, emerged as the most robust model, main- Similar levels of improvement are observed in other metrics
+taining high performance across all metrics and noise levels. as well. For instance, in Fig. 4, the fine-tuned 3B model (in
+These findings underscore the potential of LLMs to enhance brown) performs considerably better than all the other Llama
+real-world applications where environmental noise poses a sig- models (1B, 3B, and 8B in orange, green, and red, respectively)
+nificant challenge.
+under all evaluation metrics at higher noise settings.
+Although GPT-4o achieves the best performance across all
+metrics, its major drawback is the high number of parameters
+and the long inference time it requires. GPT-4o has 200×,
+67×, 25× more parameters compared to Llama-3.2-1B, Llama3.2-3B, and Llama-3.2-8B, respectively. In the next section,
+we demonstrate that comparable accuracy to GPT-4o can be
+achieved by fine-tuning a lightweight Llama model.
+
+Despite having only about 1.5% of the parameter count of the
+much larger GPT-4o, the fine-tuned model delivers comparable
+performance, achieving at least 90% of GPT-4o’s scores across
+all evaluation metrics. Our fine-tuning aligns the small Llama
+model with the large GPT-4o model in terms of noise tolerance.
+This indicates that a lightweight model like Llama-3.2-3B is
+sufficient to complete the error correction task. In conclusion,
+7
+
+Figure 4: Performance using metrics – BLEU, METEOR, ROUGE-1, ROUGE-2, and ROUGE-L – for different models including
+the fine-tuned Llama-3.2-3B model at varying noise factors on the Phone (Top) and Zoom (Bottom) datasets. For clarity, only
+the mean is displayed in this graph; the standard deviation is omitted.
+we showed that the fine-tuning approach has proven to be highly best of our knowledge, this is the first study to demonstrate the
+effective, transforming the pipeline’s output from partially cor- applicability of VT and LLM models in the ASCA domain.
+rect sentences to highly accurate predictions of the ground truth
+sentences.
+
+6
+
+5
+
+CONCLUSION
+
+LIMITATIONS
+
+Our findings demonstrate that LLMs can be effectively leveraged to enhance both text-level and semantic-level accuracy.
+However, there remain several limitations that, if addressed,
+could further improve performance. Firstly, the dataset size and
+variation are significant constraints. Our dataset contains only
+25 samples for each keystroke, and the keystroke data is limited
+to syllables and digits. Additionally, the dataset was generated
+using a single keyboard type, which restricts its applicability to
+real-world scenarios where diverse hardware setups and user
+behaviors exist. Secondly, the generalizability of the LLMs’
+error detection and correction capabilities could be improved.
+In this study, we used a single set of typical sentences for testing, which may limit the robustness of our conclusions. For
+example, we can test various types of sentences, such as the
+structured format commonly used in emails (e.g., greetings like
+"Dear [Name]" or sign-offs like "Best regards, [Name]") or
+abbreviations frequently used in text messaging (e.g., "brb" for
+"be right back" or "ttyl" for "talk to you later"). Lastly, exploring the potential of multimodal models may offer an exciting
+avenue for future research.
+
+This study demonstrated that better classification accuracy can
+be achieved by simply tuning the hyperparameters of the existing CoAtNet model. Additionally, we showed that leading
+VT models deliver accuracy that is either comparable to or
+surpasses that of the previous work. The study also aimed to
+highlight the effectiveness of utilizing LLMs and fine-tuned
+LLMs for detecting and correcting errors in ASCA scenarios.
+By integrating LLMs into the ASCA pipeline, we achieved
+a significant improvement in the robustness of keystroke predictions, even under real-world conditions with varying noise
+levels. Our experiments revealed the following key findings:
+1. The performance of CoAtNet can be improved through
+hyperparameter tuning, while the VT demonstrates
+comparable or superior performance to CoAtNet.
+2. LLMs are effective for detecting and correcting errors
+in syllables or digits, achieving higher performance
+than the simple classification model across various
+evaluation metrics, including BLEU, METEOR, and
+ROUGE.
+
+7
+
+FUTURE WORKS
+
+3. Fine-tuned small LLM models can be utilized for error
+mitigation, delivering performance comparable to that While the current study demonstrates the promise of LLMs
+in enhancing ASCA robustness, several avenues remain for
+of larger LLM models.
+exploration:
+These results highlight the transformative potential of LLMs
+in enhancing the reliability and accuracy of ASCA systems,
+• Expanded Datasets: Extend the dataset to include
+representing a significant advancement in this field. To the
+more diverse keystroke patterns, such as symbols and
+8
+
+special characters. Incorporate recordings from a
+International Journal of Information Security, 18:73–84,
+wider range of devices and environments to simulate
+2019.
+more realistic conditions.
+[10] Jia Deng, Wei Dong, Richard Socher, Li-Jia Li, Kai Li,
+and Li Fei-Fei. Imagenet: A large-scale hierarchical
+• Real-Time Error Correction: Develop and evaluate
+image database. In 2009 IEEE Conference on Computer
+real-time error correction systems using LLMs, focusVision and Pattern Recognition, pages 248–255, 2009.
+ing on latency and computational efficiency. Optimize
+LLM inference for deployment on edge devices.
+[11] Tim Dettmers, Artidoro Pagnoni, Ari Holtzman, and Luke
+Zettlemoyer. Qlora: Efficient finetuning of quantized llms,
+• Enhanced Metrics: Explore additional metrics to
+2023.
+better capture nuances in model performance, such
+as contextual coherence and user-defined constraints. [12] Tim Dettmers, Artidoro Pagnoni, Ari Holtzman, and Luke
+Investigate subjective measures, such as human evaluZettlemoyer. Qlora: Efficient finetuning of quantized llms.
+ation, for corrected text quality.
+Advances in Neural Information Processing Systems, 36,
+2024.
+By addressing these future directions, the proposed approach
+can be further refined and adapted for broader adoption in [13] Alexey Dosovitskiy. An image is worth 16x16 words:
+Transformers for image recognition at scale. arXiv
+security-sensitive domains, real-time systems, and other noisepreprint arXiv:2010.11929, 2020.
+resilient applications.
+[14] Denis Foo Kune and Yongdae Kim. Timing attacks on pin
+input devices. In Proceedings of the 17th ACM conference
+References
+on Computer and communications security, pages 678–
+680, 2010.
+[1] Josh Achiam, Steven Adler, Sandhini Agarwal, Lama [15] Tyler Giallanza, Travis Siems, Elena Smith, Erik
+Ahmad, Ilge Akkaya, Florencia Leoni Aleman, Diogo
+Gabrielsen, Ian Johnson, Mitchell A Thornton, and Eric C
+Almeida, Janko Altenschmidt, Sam Altman, Shyamal
+Larson. Keyboard snooping from mobile phone arrays
+Anadkat, et al. Gpt-4 technical report. arXiv preprint
+with mixed convolutional and recurrent neural networks.
+arXiv:2303.08774, 2023.
+Proceedings of the ACM on Interactive, Mobile, Wearable
+[2] Alex Akinbi, Erkan Deniz, Aras M Ismael, Zryan N
+and Ubiquitous Technologies, 3(2):1–22, 2019.
+Rashid, and Abdulkadir Sengur. Password-sniffing acous- [16] Tzipora Halevi and Nitesh Saxena. A closer look at keytic keylogger using machine learning. Available at SSRN
+board acoustic emanations: random passwords, typing
+4431909, 2023.
+styles and decoding techniques. In Proceedings of the 7th
+[3] S Abhishek Anand and Nitesh Saxena. Keyboard emanaACM Symposium on Information, Computer and Commutions in remote voice calls: Password leakage and noise
+nications Security, pages 89–90, 2012.
+(less) masking defenses. In Proceedings of the Eighth [17] Joshua Harrison, Ehsan Toreini, and Maryam
+ACM Conference on Data and Application Security and
+Mehrnezhad. A practical deep learning-based acoustic
+Privacy, pages 103–110, 2018.
+side channel attack on keyboards. In 2023 IEEE
+European Symposium on Security and Privacy Workshops
+[4] Umme Ayman, Md. Hafizur Rahman, and Md. Shafiqul
+(EuroS&PW), pages 270–280. IEEE, 2023.
+Islam. EnglishTense: A large scale English texts dataset
+categorized into three categories: Past, Present, Future [18] Edward J Hu, Yelong Shen, Phillip Wallis, Zeyuan Allentenses, 2024.
+Zhu, Yuanzhi Li, Shean Wang, Lu Wang, and Weizhu
+Chen. Lora: Low-rank adaptation of large language mod[5] Hangbo Bao, Li Dong, Songhao Piao, and Furu Wei. Beit:
+els. arXiv preprint arXiv:2106.09685, 2021.
+Bert pre-training of image transformers. arXiv preprint
+arXiv:2106.08254, 2021.
+[19] JBFH-Dev. Keystroke-datasets. https://github.com/
+JBFH-Dev/Keystroke-Datasets, 2023.
+[6] Tom Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared D Kaplan, Prafulla Dhariwal, Arvind Nee- [20] Diederik P Kingma. Adam: A method for stochastic
+lakantan, Pranav Shyam, Girish Sastry, Amanda Askell,
+optimization. arXiv preprint arXiv:1412.6980, 2014.
+et al. Language models are few-shot learners. Advances
+[21] Ximing Liu, Yingjiu Li, Robert H Deng, Bing Chang,
+in neural information processing systems, 33:1877–1901,
+and Shujun Li. When human cognitive modeling meets
+2020.
+pins: User-independent inter-keystroke timing attacks.
+[7] Zihang Dai, Hanxiao Liu, Quoc V Le, and Mingxing Tan.
+Computers & Security, 80:90–107, 2019.
+Coatnet: Marrying convolution and attention for all data [22] Ze Liu, Yutong Lin, Yue Cao, Han Hu, Yixuan Wei, Zheng
+sizes. Advances in neural information processing systems,
+Zhang, Stephen Lin, and Baining Guo. Swin transformer:
+34:3965–3977, 2021.
+Hierarchical vision transformer using shifted windows. In
+[8] Michael Han Daniel Han and Unsloth team. Unsloth,
+Proceedings of the IEEE/CVF international conference
+2023.
+on computer vision, pages 10012–10022, 2021.
+[9] Gerson de Souza Faria and Hae Yong Kim. Differential [23] I Loshchilov. Decoupled weight decay regularization.
+audio analysis: a new side-channel attack on pin pads.
+arXiv preprint arXiv:1711.05101, 2017.
+9
+
+[24] Sourav Panda, Yuanzhen Liu, Gerhard Petrus Hancke, and
+Umair Mujtaba Qureshi. Behavioral acoustic emanations:
+Attack and verification of pin entry using keypress sounds.
+Sensors, 20(11):3015, 2020.
+[25] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya
+Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sastry,
+Amanda Askell, Pamela Mishkin, Jack Clark, et al. Learning transferable visual models from natural language supervision. In International conference on machine learning, pages 8748–8763. PMLR, 2021.
+[26] Chen Sun, Abhinav Shrivastava, Saurabh Singh, and Abhinav Gupta. Revisiting unreasonable effectiveness of data
+in deep learning era. In Proceedings of the IEEE international conference on computer vision, pages 843–852,
+2017.
+[27] Alireza Taheritajar, Zahra Mahmoudpour Harris, and
+Reza Rahaeimehr. A survey on acoustic side channel
+attacks on keyboards. In International Conference on
+Information and Communications Security, pages 99–121.
+Springer, 2024.
+[28] Ehsan Toreini, Brian Randell, and Feng Hao. An acoustic
+side channel attack on enigma. School of Computing
+Science Technical Report Series, 2015.
+[29] Hugo Touvron, Matthieu Cord, Matthijs Douze, Francisco Massa, Alexandre Sablayrolles, and Hervé Jégou.
+Training data-efficient image transformers & distillation
+through attention. In International conference on machine
+learning, pages 10347–10357. PMLR, 2021.
+[30] Jian Wang, Rukhsana Ruby, Lu Wang, and Kaishun Wu.
+Accurate combined keystrokes detection using acoustic
+signals. In 2016 12th International Conference on Mobile
+Ad-Hoc and Sensor Networks (MSN), pages 9–14. IEEE,
+2016.
+[31] Esan Wit and Thijs Houtenbos. All your keystrokes are
+belong to us. 2014.
+[32] Tong Zhu, Qiang Ma, Shanfeng Zhang, and Yunhao Liu.
+Context-free attacks using keyboard acoustic emanations.
+In Proceedings of the 2014 ACM SIGSAC conference on
+computer and communications security, pages 453–464,
+2014.
+[33] Li Zhuang, Feng Zhou, and J Doug Tygar. Keyboard
+acoustic emanations revisited. ACM Transactions on
+Information and System Security (TISSEC), 13(1):1–26,
+2009.
+
+10
+
+8
+
+SUPPLEMENTARY MATERIALS (SM)
+Metric
+
+O-CoAtNet
+
+Llama-3.2-1B
+
+Llama-3.2-3B
+
+Llama-3.1-8B
+
+GPT-4o (∼200B)
+
+BLEU (Low)
+BLEU (Mid)
+BLEU (High)
+
+0.364 ± 0.242
+0.090 ± 0.105
+0.021 ± 0.025
+
+0.748 ± 0.291
+0.416 ± 0.296
+0.050 ± 0.096
+
+0.895 ± 0.173
+0.639 ± 0.279
+0.124 ± 0.169
+
+0.946 ± 0.124
+0.779 ± 0.247
+0.195 ± 0.213
+
+0.986 ± 0.059*
+0.943 ± 0.126
+0.635 ± 0.293
+
+METEOR (Low)
+METEOR (Mid)
+METEOR (High)
+
+0.633 ± 0.182
+0.317 ± 0.168
+0.079 ± 0.080
+
+0.865 ± 0.213
+0.659 ± 0.249
+0.176 ± 0.181
+
+0.957 ± 0.075
+0.829 ± 0.164
+0.364 ± 0.219
+
+0.981 ± 0.044
+0.902 ± 0.128
+0.470 ± 0.226
+
+0.994 ± 0.024*
+0.974 ± 0.058
+0.807 ± 0.194
+
+ROUGE-1 (Low)
+ROUGE-1 (Mid)
+ROUGE-1 (High)
+
+0.682 ± 0.153
+0.394 ± 0.152
+0.131 ± 0.103
+
+0.873 ± 0.198
+0.683 ± 0.224
+0.228 ± 0.186
+
+0.959 ± 0.070
+0.841 ± 0.149
+0.423 ± 0.198
+
+0.982 ± 0.043
+0.908 ± 0.119
+0.512 ± 0.208
+
+0.994 ± 0.025*
+0.976 ± 0.055
+0.817 ± 0.179
+
+ROUGE-2 (Low)
+ROUGE-2 (Mid)
+ROUGE-2 (High)
+
+0.487 ± 0.215
+0.160 ± 0.145
+0.018 ± 0.047
+
+0.806 ± 0.251
+0.529 ± 0.278
+0.081 ± 0.134
+
+0.927 ± 0.121
+0.732 ± 0.220
+0.204 ± 0.201
+
+0.964 ± 0.085
+0.839 ± 0.187
+0.298 ± 0.229
+
+0.989 ± 0.047*
+0.957 ± 0.094
+0.707 ± 0.252
+
+ROUGE-L (Low)
+ROUGE-L (Mid)
+ROUGE-L (High)
+
+0.682 ± 0.153
+0.394 ± 0.152
+0.131 ± 0.103
+
+0.872 ± 0.198
+0.680 ± 0.225
+0.223 ± 0.182
+
+0.959 ± 0.070
+0.840 ± 0.150
+0.410 ± 0.199
+
+0.981 ± 0.044
+0.906 ± 0.121
+0.502 ± 0.211
+
+0.994 ± 0.025*
+0.976 ± 0.055
+0.816 ± 0.180
+
+Table 7: Performance using metrics – BLEU, METEOR, ROUGE-1, ROUGE-2, and ROUGE-L – for different models at varying
+noise factors on the Phone dataset. Bolded numbers indicate the best performance in each row, while an asterisk (*) highlights
+the best performance within the same metric.
+Metric
+
+O-CoAtNet
+
+LLAMA-3.2-1B
+
+LLAMA-3.2-3B
+
+LLAMA-3.1-8B
+
+GPT-4o (∼200B)
+
+BLEU (Low)
+BLEU (Mid)
+BLEU (High)
+
+0.589 ± 0.279
+0.072 ± 0.084
+0.027 ± 0.031
+
+0.848 ± 0.246
+0.316 ± 0.288
+0.083 ± 0.134
+
+0.950 ± 0.120
+0.567 ± 0.286
+0.214 ± 0.229
+
+0.973 ± 0.086
+0.681 ± 0.270
+0.300 ± 0.258
+
+0.990 ± 0.054*
+0.922 ± 0.143
+0.764 ± 0.251
+
+METEOR (Low)
+METEOR (Mid)
+METEOR (High)
+
+0.768 ± 0.175
+0.269 ± 0.161
+0.110 ± 0.102
+
+0.912 ± 0.186
+0.548 ± 0.284
+0.236 ± 0.220
+
+0.978 ± 0.061
+0.779 ± 0.184
+0.478 ± 0.234
+
+0.990 ± 0.034
+0.846 ± 0.154
+0.573 ± 0.220
+
+0.996 ± 0.021*
+0.962 ± 0.071
+0.881 ± 0.146
+
+ROUGE-1 (Low)
+ROUGE-1 (Mid)
+ROUGE-1 (High)
+
+0.806 ± 0.144
+0.349 ± 0.154
+0.174 ± 0.121
+
+0.923 ± 0.168
+0.584 ± 0.260
+0.289 ± 0.220
+
+0.979 ± 0.058
+0.797 ± 0.162
+0.529 ± 0.211
+
+0.990 ± 0.033
+0.860 ± 0.136
+0.612 ± 0.199
+
+0.997 ± 0.022*
+0.965 ± 0.065
+0.887 ± 0.135
+
+ROUGE-2 (Low)
+ROUGE-2 (Mid)
+ROUGE-2 (High)
+
+0.684 ± 0.222
+0.128 ± 0.134
+0.031 ± 0.066
+
+0.887 ± 0.205
+0.415 ± 0.290
+0.132 ± 0.179
+
+0.964 ± 0.088
+0.665 ± 0.242
+0.319 ± 0.241
+
+0.981 ± 0.061
+0.758 ± 0.217
+0.415 ± 0.246
+
+0.994 ± 0.038*
+0.937 ± 0.113
+0.811 ± 0.204
+
+ROUGE-L (Low)
+ROUGE-L (Mid)
+ROUGE-L (High)
+
+0.806 ± 0.144
+0.349 ± 0.154
+0.174 ± 0.121
+
+0.921 ± 0.168
+0.578 ± 0.262
+0.283 ± 0.217
+
+0.979 ± 0.058
+0.795 ± 0.165
+0.523 ± 0.214
+
+0.990 ± 0.033
+0.858 ± 0.139
+0.607 ± 0.202
+
+0.997 ± 0.022*
+0.964 ± 0.066
+0.887 ± 0.136
+
+Table 8: Performance using metrics – BLEU, METEOR, ROUGE-1, ROUGE-2, and ROUGE-L – for different models at varying
+noise factors on the Zoom dataset. Bolded numbers indicate the best performance in each row, while an asterisk (*) highlights
+the best performance within the same metric.
+
+11
+
+Metric
+
+Phone
+
+Zoom
+
+BLEU (Low)
+BLEU (Mid)
+BLEU (High)
+
+0.944 ± 0.107
+0.884 ± 0.172
+0.585 ± 0.310
+
+0.955 ± 0.098
+0.854 ± 0.199
+0.658 ± 0.290
+
+METEOR (Low)
+METEOR (Mid)
+METEOR (High)
+
+0.975 ± 0.048
+0.948 ± 0.083
+0.773 ± 0.211
+
+0.978 ± 0.045
+0.933 ± 0.102
+0.826 ± 0.180
+
+ROUGE-1 (Low)
+ROUGE-1 (Mid)
+ROUGE-1 (High)
+
+0.976 ± 0.046
+0.950 ± 0.080
+0.786 ± 0.193
+
+0.979 ± 0.042
+0.937 ± 0.094
+0.835 ± 0.166
+
+ROUGE-2 (Low)
+ROUGE-2 (Mid)
+ROUGE-2 (High)
+
+0.953 ± 0.088
+0.912 ± 0.132
+0.661 ± 0.270
+
+0.961 ± 0.082
+0.885 ± 0.158
+0.730 ± 0.244
+
+ROUGE-L (Low)
+ROUGE-L (Mid)
+ROUGE-L (High)
+
+0.976 ± 0.046
+0.950 ± 0.080
+0.785 ± 0.194
+
+0.979 ± 0.043
+0.936 ± 0.094
+0.833 ± 0.167
+
+Table 9: Performance using metrics – BLEU, METEOR, ROUGE-1, ROUGE-2, and ROUGE-L – for the fine-tuned Llama-3.23B model at varying noise factors on the Phone and Zoom datasets.
+
+12
+
+

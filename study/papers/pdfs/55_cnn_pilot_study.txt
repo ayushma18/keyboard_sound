@@ -1,0 +1,1479 @@
+Article
+
+Acoustic Side-Channel Vulnerabilities in Keyboard Input
+Explored Through Convolutional Neural Network Modeling:
+A Pilot Study
+Michał Rzemieniuk, Artur Niewiarowski
+
+and Wojciech Ksiażek
+˛
+*
+
+Department of Computer Science, Faculty of Computer Science and Mathematics, Cracow University of
+Technology, 31-155 Cracow, Poland; michal.rzemieniuk@gmail.com (M.R.); artur.niewiarowski@pk.edu.pl (A.N.)
+* Correspondence: wojciech.ksiazek@pk.edu.pl
+
+Abstract
+This paper presents the findings of a pilot study investigating the feasibility of recognizing keyboard keystroke sounds using Convolutional Neural Networks (CNNs) as a
+means of simulating an acoustic side-channel attack aimed at recovering typed text. A
+dedicated dataset of keyboard audio recordings was collected and preprocessed using
+signal-processing techniques, including Fourier-transform-based feature extraction and
+mel-spectrogram analysis. Data augmentation methods were applied to improve model
+robustness, and a CNN-based prediction architecture was developed and trained. A series
+of experiments was performed under multiple conditions, including controlled laboratory
+settings, scenarios with background noise interference, tests involving a different keyboard
+model, and evaluations following model quantization. The results indicate that CNN-based
+models can achieve high keystroke-prediction accuracy, demonstrating that this class of
+acoustic side-channel attacks is technically viable. Additionally, the study outlines potential
+mitigation strategies designed to reduce exposure to such threats. Overall, the findings
+highlight the need for increased awareness of acoustic side-channel vulnerabilities and underscore the importance of further research to more comprehensively understand, evaluate,
+and prevent attacks of this nature.
+Keywords: keyboard sound; acoustic side-channel attacks; convolutional neural network;
+cybersecurity; deep learning
+
+1. Introduction
+
+Academic Editors: Domenico Desiato
+and Stefano Cirillo
+Received: 9 December 2025
+Revised: 31 December 2025
+Accepted: 3 January 2026
+Published: 6 January 2026
+Copyright: © 2026 by the authors.
+Licensee MDPI, Basel, Switzerland.
+This article is an open access article
+distributed under the terms and
+conditions of the Creative Commons
+Attribution (CC BY) license.
+
+Appl. Sci. 2026, 16, 563
+
+In today’s world, the security of information systems has become a crucial aspect
+of everyday life. According to DataReportal [1], as of October 2025 approximately 6 billion people—representing 73.2% of the global population—use the Internet. Every day,
+individuals engage in online shopping, use mobile banking services, and digitally sign
+documents. However, this widespread digitalization also exposes users to a variety of
+well-known cyber threats. These include phishing, in which attackers impersonate trusted
+institutions or individuals by sending deceptive messages or links designed to steal sensitive information, such as login credentials or financial data. Malware refers to malicious
+software, including viruses, trojans, worms, and spyware that infects devices through
+attachments, links, or software vulnerabilities. Spam and unsolicited messages involve the
+large-scale distribution of unwanted content, often containing advertisements, scams, or
+links to harmful websites. Clickjacking is a technique that tricks users into clicking hidden
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+2 of 23
+
+elements on a website, causing them to unintentionally perform unwanted actions, such
+as revealing data or activating functions. Finally, identity theft, impersonation, or profile
+cloning occur when attackers steal personal information, take over accounts, or create fake
+profiles to deceive others [2].
+As users, we are becoming increasingly aware of common cyber threats and better
+prepared to defend against them; however, we often remain unaware of new and lesserknown attack vectors that may pose significant cybersecurity risks in the coming years.
+One such category of threats involves side-channel attacks, which are closely associated
+with observable physical phenomena [3]. These attacks exploit unintended information
+leakage through various physical channels, including electromagnetic emissions [4], power
+consumption patterns [5], mobile device sensors [6,7], inter-processor communication
+links [8], and even sound or acoustic signals [9,10].
+A wide range of potential side-channel attacks has been identified [11]. Table 1 illustrates the main threats, grouped into three families. Physical-emission attacks observe
+unintentional leakages, such as power consumption, electromagnetic radiation, or acoustic signals. Timing and microarchitectural attacks exploit execution-time differences and
+hardware behaviors (e.g., caches or speculative execution) to infer secret-dependent operations, even without direct access to the data. Software, implementation, and data-flow
+attacks leverage bugs, memory footprints, and shared communication channels to recover
+sensitive information from residuals or access patterns. Together, these families highlight
+that seemingly benign by-products of computation can be systematically measured and
+correlated to reconstruct confidential data.
+In our research, we focused exclusively on acoustic side-channel attacks targeting
+keyboard-like redinput devices. Acoustic attacks remain a relatively underexplored area,
+although the first documented attempts date back to the 1950s, when British intelligence
+reportedly exploited the acoustic emanations of Hagelin cipher machines (mechanically
+similar to the Enigma) located in the Egyptian embassy [12]. In the 21st century, the
+rapid increase in the number of microphones embedded in desktop computers, laptops,
+tablets, and smartphones has substantially raised the risk posed by acoustic side-channel
+attacks. Such attacks are possible for a straightforward reason: pressing and releasing
+keys generates sound and vibration, and the acoustic signatures of different keys can be
+distinct. For example, the difference between the spacebar and the Enter key is often
+audible even without advanced analysis. Specialized signal-processing and classification
+methods make it feasible to analyse and distinguish sounds produced by individual keys.
+Typing style (which fingers are used, strike angle, force) influences the amplitude and
+spectral characteristics of keystroke sounds, while the choice of keyboard model further
+affects signal properties. Although desktop keyboards vary widely, successful attacks on a
+given laptop model can generalize to many units of the same model, thereby increasing
+the practical impact of an attack [13]. Acoustic eavesdropping can be mounted in multiple
+scenarios. Some microphones can capture keystroke sounds from distances on the order
+of one metre [14]. Recordings may be obtained in public places such as cafés, libraries,
+or open-plan offices. An attacker with physical access can directly record key sounds
+from a victim’s keyboard, and malware on the victim’s device can exfiltrate audio to a
+remote server. Moreover, keystroke audio may be incidentally captured during remote
+meetings on platforms such as Zoom or Microsoft Teams [13]. Although such attacks were
+once considered impractical, recent advances in artificial intelligence—particularly convolutional neural networks—have enabled effective analysis and classification of acoustic
+leakage, with applications across cybersecurity [15,16], medicine [17,18], and general sound
+recognition [19,20]. Only a limited number of studies have investigated the use of machinelearning techniques, including convolutional neural networks, to recognize pressed keys
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+3 of 23
+
+based on keyboard acoustics as part of acoustic side-channel attacks. In one study [21],
+traditional machine-learning algorithms were applied to classify keystrokes using acoustic features, while another work [9] employed convolutional neural networks (CNNs) to
+achieve higher recognition accuracy and better generalization across different devices.
+One of the first studies demonstrating the feasibility of using machine-learning techniques to predict pressed keys on a keyboard was conducted by Compagno et al. [22]. The
+authors obtained recordings of keystrokes transmitted through a Skype connectaion and
+extracted Mel-Frequency Cepstral Coefficients (MFCCs) as the primary acoustic features.
+Several classifiers were evaluated, including logistic regression, support vector machines
+(SVMs), linear discriminant analysis (LDA), Random Forest, and k-nearest neighbors (kNN). The dataset consisted of recordings from five users on six laptops (2× MacBook Pro
+13” 2014, 2× Lenovo ThinkPad E540, and 2× Toshiba Tecra M2). Each participant typed the
+alphabet (A–Z) ten times using both hunt-and-peck and touch-typing styles, resulting in
+260 samples per session (ten per letter). The experiments showed that the models achieved
+high accuracy (around 90%) when trained on data from a known device and user; however,
+performance dropped significantly—to below 20%—when the amount of prior knowledge
+was limited or when background noise was present. In the study by Bai et al. [21], the
+authors employed microphones embedded in smartphones to eavesdrop on keystrokes
+with the goal of designing a system that performs reliably regardless of keyboard type,
+position, or user. The system operates as follows: a smartphone records keystroke sounds,
+followed by signal normalization and segmentation. Next, the system estimates the keyboard type (achieving nearly 100% accuracy using MFCC-based SVM classification) and the
+distance between the microphones and the keyboard based on Time Difference of Arrival
+(TDoA) and tonal features. A small training dataset was collected using a Huawei Mate 20
+Pro smartphone with nine participants and nine different keyboards. Feature engineering
+produced descriptors such as TDoA and Power Spectral Density (PSD), reflecting sound
+attenuation properties. The final predictive model-an SVM-identified pressed keys and
+subsequently refined predictions by selecting the most probable word from a dictionary
+containing the 1500 most frequent English words. The resulting model achieved 91%
+accuracy under 10-fold cross-validation. For unseen users, top-5 accuracy reached 91.52%,
+while for unseen users and keyboards, 72.25%. In Harrison et al. [9], experiments were
+conducted to recognize pressed keys using the microphone of a smartphone. When the
+phone was placed near the keyboard, the best-performing model achieved an accuracy of
+approximately 95%, while in the case of a remote attack via a Zoom video conference, the
+accuracy reached 93%. These results are remarkably given the compression and information
+loss inherent to VoIP audio transmission, demonstrating that users remain vulnerable to
+this form of acoustic side-channel attack even during online meetings. In this study, the
+authors recorded sounds from 36 keys (0–9, a–z) on a MacBook Pro 16” (2021), each pressed
+25 times using varying force and finger placement. Two attack scenarios were considered:
+the phone attack (on-site) — using an iPhone 13 mini placed 17 cm from the keyboard—and
+the Zoom attack (remote)—using the laptop’s built-in microphone during a video call.
+Recordings were segmented into individual keystrokes through energy analysis in the
+frequency-domain (FFT). For the Zoom recordings, adaptive thresholding was necessary
+to compensate for built-in noise suppression. Each sound sample was then transformed
+into a mel-spectrogram, a time–frequency representation perceptually aligned with human
+hearing. This representation enabled the use of convolutional neural networks designed
+for image recognition. To improve robustness, data augmentation techniques were applied.
+The final predictive model was a CoAtNet convolution-attention network, which had
+previously shown strong performance on ImageNet classification tasks. The relevance of
+this research direction is further confirmed by Ayati et al. [10], who in 2025 proposed a
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+4 of 23
+
+method combining vision transformers for acoustic feature classification with large language models (LLMs) for post-prediction error correction. Their study reused the publicly
+available dataset from [9], again employing mel-spectrograms and data augmentation.
+Several architectures were evaluated, including CoAtNet, ViT, Swin, DeiT, BEiT, and CLIP.
+The Swin Transformer achieved the best classification accuracy. In the subsequent stage,
+large language models such as GPT-4o and the LLaMA family were introduced to correct
+typographical errors in the predicted text. The fine-tuned LLaMA-3.2-3B model, adapted
+using LoRA/QLoRA (Low-Rank Adaptation), achieved performance comparable to GPT4o despite having approximately 67 times fewer parameters. Despite these impressive
+accuracy scores, existing research on acoustic side-channel attacks against keyboards still
+faces notable limitations. Most experiments have been conducted in controlled laboratory
+environments, using a limited number of participants and keyboard models, which restricts
+generalization to diverse real-world acoustic settings. Current models remain sensitive to
+background noise, microphone placement, variations in keyboard construction, and individual typing styles. Furthermore, existing approaches primarily focus on character-level
+reconstruction, often overlooking higher-level linguistic context and real-time feasibility.
+Based on the existing body of literature on acoustic side-channel attacks, future research should prioritize the development of more noise-resilient machine learning architectures, the creation of larger and more diverse datasets encompassing multiple keyboard
+types and operating environments, and the integration of multimodal approaches that combine audio, video, and vibration signals. Another important research direction involves the
+design of defensive mechanisms—both hardware and software—that can reduce acoustic
+emissions or obfuscate exploitable signal features. In the longer term, studies should focus
+on enabling real-time attack evaluation and assessing the broader implications of such
+methods for authentication security and user privacy.
+Considering that the topic under investigation is relatively new, that the number of
+studies addressing it remains limited, and that the associated threat is steadily increasing,
+we decided to undertake research in this area. Our main contributions can be summarized
+as follows:
+•
+
+•
+
+•
+•
+
+•
+•
+
+Dataset preparation and publication: We collected and publicly released a dataset on
+the Zenodo platform, obtained using two mechanical keyboards—a Fnatic Gear Rush
+with Cherry MX Brown switches and an Anne Pro 2 keyboard.
+Data processing pipeline: We designed a complete preprocessing pipeline that includes Fourier transform, mel-spectrogram construction, data augmentation, and
+feature extraction.
+Model Design and evaluation: We developed a custom convolutional neural network
+(CNN) architecture, trained, validated, and tested for keystroke sound recognition.
+Experimental analysis: We conducted multiple experiments under varying conditions—
+in controlled environments, with background noise interference, using a different
+keyboard model, and with a quantized version of the trained model.
+Security mitigation: We proposed a potential countermeasure against such acoustic
+side-channel attacks.
+Future research directions: We identified several avenues for further investigation in
+this emerging field.
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+5 of 23
+
+Table 1. Hierarchy of Side-Channel Attacks—brief descriptions.
+Category
+
+Subcategory
+
+Attack
+SPA (Simple Power Analysis)
+DPA (Differential Power Analysis)
+
+Power Analysis
+Physical emissions
+
+CPA (Correlation Power Analysis)
+Profiling/Template attacks
+ML/DL-based enhancements
+
+Electromagnetic (EM) attacks
+
+EM emissions
+
+Acoustic attacks
+
+Acoustic (e.g., keystroke sounds)
+
+Timing attacks
+
+Cache-timing, etc.
+
+Architecture exploits
+
+Spectre/Meltdown/Rowhammer
+
+Software bugs
+
+Heartbleed (example)
+
+Memory/footprint related attacks
+
+Memory access/residual leaks
+
+Inter-processor/communication leakage
+
+Shared bus/comms leakage
+
+Timing & Microarchitectural
+
+Software/Implementation/Data-flow
+
+One-Sentence Description
+Examines single power traces to infer executed operations, such as
+identifying instructions or key-dependent patterns.
+Uses statistical comparison of multiple power traces to reveal secret
+keys by correlating variations with hypothetical data.
+Correlates measured power consumption with predicted intermediate
+values to determine the correct secret key.
+Builds a leakage model from a known device and matches target traces
+to recover confidential information.
+Employs machine- and deep-learning techniques to improve trace
+classification, denoising, and key-recovery efficiency.
+Capture electromagnetic radiation emitted by electronic components to
+deduce the processed data without direct contact.
+Analyze sounds produced by hardware components such as keyboards
+or fans to reconstruct input or operational data.
+Exploit variations in computation time, such as cache hits or misses, to
+infer secret-dependent operations or keys.
+Leverage microarchitectural vulnerabilities and speculative execution
+to leak data across isolated memory regions.
+Combine software vulnerabilities with side-channel observations to
+extract sensitive data from memory.
+Recover private data from memory access patterns, cache residues, or
+leftover artifacts.
+Exploit shared communication channels or buses to infer information
+exchanged between processes or cores.
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+6 of 23
+
+2. Materials and Methods
+2.1. Dataset
+In order to carry out the experiments, it was necessary to acquire an audio dataset
+comprising recordings of individual keystrokes on a computer keyboard. A dataset of
+isolated keystroke audio was obtained using a fully automated acquisition workflow. A
+dedicated software module was developed to record the acoustic signal of each keypress
+and to automatically label each instance with its corresponding key class.
+The recording setup comprised a Fnatic Gear Rush mechanical keyboard equipped
+with Cherry MX Brown switches and a Novox NC1 microphone. The microphone was
+positioned 30 cm posterior to the keyboard on an external stand that was mechanically
+decoupled from the desk to minimize vibrations transmitted through the desk. Each
+recording includes a 0.2 s pre-keypress window and a 0.5 s post-release window to capture
+the full temporal profile of each keystroke event. The signals were sampled at 48 kHz and
+stored in WAV format. While this sampling frequency provides sufficient temporal and
+spectral resolution for capturing short, transient keystroke sounds, the proposed approach
+is not inherently dependent on this specific value and could be applied to recordings
+obtained at lower sampling rates with appropriate preprocessing adjustments. For the
+training dataset, 60 samples were collected for each letter, including only basic Latin
+alphabet characters (a–z). The data were obtained through text transcription on typing.com,
+approximating naturalistic text entry. All recordings were produced by a single participant
+at a typing rate of 15 to 20 words per minute (wpm).
+All test recordings were acquired with a Novox NC1 condenser microphone (manufactured by Novox, Gdańsk, Poland) positioned at a fixed distance of approximately 30 cm
+from the keyboard. In Experiment 1 and Experiment 2, keystroke audio was recorded in a
+quiet room free from substantial acoustic interference using a Fnatic Gear Rush mechanical
+keyboard, and at least 30 samples were collected for each of the 26 letter keys, with only
+minor variability across trials. In Experiment 3, the same keyboard was recorded while a
+publicly available “Crowd Noise 1 Hour White Noise” track was played from a source positioned approximately 50 cm from the microphone to simulate realistic ambient conditions.
+As before, at least 30 samples were collected for each of the 26 letter keys. In Experiment
+4, recordings were conducted in the same quiet room using an Anne Pro 2 mechanical
+keyboard equipped with Kailh Brown switches. The microphone position remained fixed
+at approximately 30 cm throughout the session, and at least 30 samples were acquired for
+each letter of the alphabet.
+In the context of this pilot study, we assume an attacker who has access to a microphone
+placed in the physical vicinity of the victim’s keyboard (typically 20–60 cm away), such as a
+smartphone on a desk, a laptop microphone, or another ambient recording device present in
+the environment. The attacker is not assumed to have access to the victim’s screen or typed
+content, and relies solely on passively captured acoustic signals. For the “clean” and “newsample” scenarios, we consider a targeted attacker who has the opportunity to collect a
+small number of reference samples under conditions similar to those of the victim, enabling
+model fine-tuning. The “crowd noise” and “different keyboard” scenarios correspond to
+more constrained adversaries, where no victim-specific recordings are available and the
+model must generalize to more challenging or mismatched conditions. This threat model
+reflects practical constraints under which acoustic side-channel attacks may occur (e.g.,
+office environments, shared workspaces, public areas), and clarifies which of the evaluated
+experiments correspond to realistic attacker capabilities.
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+7 of 23
+
+2.2. Data Augmentation
+Data augmentation involves expanding the training set by deliberately modifying
+existing samples [23]. This technique is particularly important when data availability
+is limited, as it allows the creation of additional recording variants and increases data
+diversity without the need to acquire new samples. Its primary purpose is to improve the
+effectiveness of deep learning models, especially in scenarios where the actual number of
+examples is insufficient for effective training. In the case of keystroke recordings, the original samples may be sensitive to minor variations such as microphone position, keystroke
+force, acoustic background, or hardware interference. Data augmentation allows these
+factors to be systematically simulated and incorporated without the need for additional
+data collection. In this study, five basic audio signal augmentation techniques were applied
+to increase data diversity and improve the overall robustness of the model to interference:
+•
+•
+•
+•
+•
+
+time shift
+random gain
+background noise addition
+random time stretch
+random pitch shift
+
+The total number of training samples before augmentation was 1560 and after augmentation 9360 (1560 original recordings and 7800 generated samples). The collection
+was divided into parts: test 20% of the total (1872 samples), validation 12% of the total
+(1124 samples), and training—the remaining 68% (6364 samples).
+Table 2 summarizes how the collected data were divided into the training, validation,
+and test sets.
+Table 2. Division of the Dataset into Training, Validation, and Test Sets.
+
+Split
+Testing
+Validation
+Training
+
+Samples
+
+Share of Total
+
+1872
+1124
+6364
+
+20%
+12%
+68%
+
+2.3. Data Preprocessing and Feature Extraction
+The analysis of sounds produced by a keyboard for the purpose of recognition and
+classification involves numerous technical and acoustic challenges. A single keystroke
+sound is very short, impulsive, and often similar to others, which necessitates the use of
+advanced signal processing methods and appropriately chosen data representations. After
+collecting and pre-processing the recordings, a key step in building a classification system
+is feature extraction, i.e., converting the audio signal into a form that can be effectively
+analyzed by machine learning algorithms. In this project, mel-spectrograms were used
+to represent keystroke sounds. A mel-spectrogram (Figure 1) is a visual representation
+of sound that more closely corresponds to what humans hear. It is created by dividing a
+recording into short time segments, determining the frequency spectrum for each segment,
+and then converting that spectrum to the Mel scale a non-linear frequency scale that
+describes low tones more densely and high tones less densely. On a mel-spectrogram,
+the horizontal axis represents time, the vertical axis represents frequency bands on the
+Mel scale, and the colour or brightness shows the energy level of these bands, usually in
+decibels. This form makes it easier to notice perceptually important patterns and allows
+sound to be analyzed more effectively using algorithms, including convolutional neural
+networks. As a result, mel-spectrograms are often the starting point for sound recognition
+and classification tasks. Our choice of mel-spectrograms over MFCCs reflects the fact that
+“MFCC involves performing the discrete cosine transform on a mel-spectrogram, producing
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+8 of 23
+
+a compressed representation that prioritises the frequencies used in human speech”. Since
+human speech is not the target in this study, and because this compression may discard
+information that is relevant for keystroke recognition, MFCCs were considered less suitable
+than mel-spectrograms [9].
+
+Figure 1. Example of a Mel-Spectrogram Generated from a Recorded Keystroke.
+
+The generated mel-spectrograms were prepared as input data for convolutional neural
+networks. By representing the acoustic signals in a two-dimensional time–frequency
+domain, this representation enables the model to interpret sound patterns as images.
+This approach allows convolutional layers can effectively capture spatial correlations
+within the spectrograms, improving the network’s ability to distinguish between different
+keystroke sounds.
+2.4. Convolutional Neural Networks
+A convolutional neural network (CNN) is a deep-learning architecture designed to
+efficiently process grid-structured data, such as images or audio spectrograms [24]. Rather
+than analyzing the entire signal at once, CNNs employ local convolutional filters that slide
+across the input data and learn characteristic patterns. The network gradually moves from
+simple features to increasingly abstract representations, which enhances robustness its
+resistance to noise and allows it to effectively solve classification tasks, including the recognition of short and subtle acoustic signals. The proposed CNN architecture (Figure 2) was
+designed to classify keystroke sounds represented as mel-spectrograms. The input onsists
+of normalized images with a shape of, corresponding to 85 time frames and 128 Mel-scale
+frequency bands. The model comprises three convolutional blocks. Each block includes
+a Conv2D layer, batch normalisation, an ReLU activation function, a max-pooling layer,
+and dropout to mitigate overfitting. After the third convolutional block, a GlobalAveragePooling2D is applied, which allows for effective aggregation of information in channels
+and reduction of the number of trainable parameters. This is followed by a fully connected
+dense layer with 128 neurons with ReLU activation and a final softmax layer returning
+the probability distribution over 26 classes. The detailed architecture of the proposed
+convolutional neural network is presented in Figure 2.
+The first convolutional block uses 64 filters with a kernel size of 3 × 3 to extract local
+time–frequency patterns from the mel-spectrogram input. The second and third blocks
+increase the number of filters to 128 and 256, enabling the model to capture increasingly
+abstract spectral–temporal structures characteristic of individual keystrokes. Batch Normalization after each convolution stabilizes learning, while MaxPooling reduces spatial
+resolution and helps the network focus on the most salient regions of the spectrogram.
+Dropout provides additional regularization. After the final block, a GlobalAveragePooling2D layer converts the feature maps into a compact representation that significantly
+reduces the number of trainable parameters compared with dense flattening layers. The
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+9 of 23
+
+resulting feature vector is passed to a dense layer with 128 units, and the concluding
+softmax layer outputs class probabilities for all 26 letter classes.
+
+Figure 2. Model architecture.
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+10 of 23
+
+Training was performed using the Adam optimiser with a learning rate of 0.001 and a
+batch size of 32 samples, for a maximum of 900 epochs. Although the training schedule
+allowed for up to 900 epochs, model selection was performed using early stopping based
+on validation loss, ensuring that the final model corresponds to the epoch with the best
+generalization rather than the final training iteration. Accuracy and loss function were
+monitored on an ongoing basis, and after training was completed, the model was evaluated
+on a test set to verify generalisation to previously unknown examples.
+After training was completed, the keystroke sound recognition model underwent
+post-training optimization. Dynamic Range Quantisation was applied primarily to significantly reduce the model size, limit memory consumption, and speed up predictions with
+minimal impact on accuracy. This technique itself involves replacing the 32-bit floatingpoint representation of weights with their 8-bit integer values. The resulting reduction in
+numerical precision substantially decreases storage requirements and computational cost,
+while typically preserving performance comparable to that of the original model.
+2.5. Evaluation Metrics
+The main evaluation metrics, commonly used in machine learning studies, were
+derived from the confusion matrix.
+Recall measures the coverage of actual positives. The proportion of truly positive
+instances that the model correctly identifies.
+Recall =
+
+TP
+TP + FN
+
+Precision measures the correctness of positive predictions. The proportion of predicted
+positive instances that are truly positive.
+Precision =
+
+TP
+TP + FP
+
+Accuracy is the model’s overall effectiveness. The fraction of all predictions that
+are correct.
+TP + TN
+Accuracy =
+TP + TN + FP + FN
+In addition to the calculated metrics, complete confusion matrices were also presented, enabling a detailed analysis of model performance and misclassifications for
+individual letters.
+2.6. Experiment Schema
+The experimental design (Figure 3) comprised four complementary variants of
+keystroke sound acquisition, arranged to progressively increase environmental complexity
+and to assess model generalization. In all cases, the same microphone (Novox NC1) was
+positioned at a fixed distance of approximately 30 cm from the keyboard. In Experiment 1
+and Experiment 2, recordings were conducted in a quiet room using a Fnatic Gear Rush
+keyboard, providing a laboratory-style reference condition. In Experiment 3, controlled
+background noise was introduced to emulate a more realistic environment with acoustic
+interference. In Experiment 4, the setup returned to a quiet room but changed the sound
+source with a different mechanical keyboard (Anne Pro 2 with Kailh Brown switches) to
+assess hardware effects under identical capture conditions. For each variant, a comparable
+number of samples was collected for all 26 letters. The recorded data were then preprocessed into mel-spectrograms, augmented, and partitioned into training, validation, and
+test sets. Each experiment was evaluated with the same metrics (accuracy, precision, and
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+11 of 23
+
+recall), enabling direct comparison of recognition performance across the three conditions:
+quiet, background noise, and different keyboard.
+Dataset Collection
+Data gathering in controlled conditions
+26 letters (a-z)
+60 samples per key
+Labeling data
+Trimming or padding data
+
+Preprocessing
+Data augmentation
+time shift
+random gain
+background noise addition
+random time stretch
+random pitch shift
+Audio feature extraction (mel-spectrograms)
+Model training
+
+CNN model training
+Dynamic Range Quantization
+
+Experiment 1
+
+Experiment 2
+
+Experiment 3
+
+Experiment 4
+
+Inference on
+test set
+Baseline model
+evaluation
+
+Record new
+clean samples
+Infer predictions
+with baseline
+model
+
+Record new
+samples with
+white noise
+Infer predictions
+with baseline
+model
+
+Record samples
+on different
+keyboard
+Fine-tune model
+Infer predictions
+with fine-tuned
+model
+
+Evaluation
+
+Accuracy
+Recall
+Precision
+
+Figure 3. Experiment schema.
+
+In the following sections, the results of the designed experiments are presented in detail.
+
+3. Results
+The model was trained in the Google Colab environment using an NVIDIA A100
+GPU. This setup provides convenient access to high-performance computing without
+maintaining costly in-house infrastructure, while GPU acceleration substantially reduces
+training time. Google Colab is fully compatible with the TensorFlow and Keras libraries,
+enabling straightforward model development without additional configuration. Training
+was conducted in Python 3.12.12 using TensorFlow 2.19.0 and Keras 3.10.0.
+3.1. Experiment 1: Baseline Test Evaluation
+This experiment provides a post training estimate of model performance on an independent test set drawn from the same recording series as the training data. Although the
+data distribution matches the training setup, all test samples were strictly unseen during
+training and validation.
+As evidenced by the learning-curve plots (Figure 4) the model finished learning after
+690 epochs thanks to an early stopping mechanism that detected no further improvement
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+12 of 23
+
+in the validation score. The best model weights from epoch 620 were subsequently restored,
+ensuring optimal network parameters. On the test set, the model achieved an accuracy
+of 96.9% and with a low loss value of 0.1685. The training progress curves indicate rapid
+acquisition of relevant patterns after just a few dozen epochs, the accuracy exceeded 90%.
+Both metrics, accuracy and loss, stabilise with a small difference between the training and
+validation sets, suggesting that overfitting did not occur.
+
+Figure 4. Training curves.
+
+The confusion matrix (Figure 5) supports these findings. Correct predictions are
+concentrated along the main diagonal, indicating strong discrimination across all letters.
+True positives are fairly uniform about 68 to 72 samples per class. Misclassification errors
+are extremely sparse, totaling only 32 instances across the entire matrix. The most frequent
+error involved the true label “m” being predicted as “j” three occasions. Two additional
+misclassifications occurred twice each: true “w” predicted as “r” and true “d” predicted as
+“y”. All remaining errors occurred only once, further supporting the model’s robustness
+and low overall error rate.
+
+True label
+z y x w v u t s r q p o nm l k j i h g f e d c b a
+
+Confusion Matrix (Counts)
+
+72 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+0 71 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0
+0 0 68 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 2 0 1
+0 0 1 68 0 0 0 0 0 0 0 0 0 0 0 0 0 0 3 0 0 0 0 0 0 0
+0 0 0 0 71 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0
+0 0 0 0 0 69 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 1 0 0 1 0
+0 0 0 0 0 0 68 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 2 1
+0 0 0 0 0 0 0 71 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0
+0 0 0 0 0 0 0 0 71 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 71 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+0 1 0 0 0 0 0 0 3 0 68 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 1 70 0 0 1 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 1 0 1 69 1 0 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 1 71 0 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 72 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 1 0 0 3 0 0 0 68 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 71 0 0 0 0 0 0 0 0 1
+0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 69 0 1 0 0 0 1 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 72 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 71 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 71 0 0 0 0 0
+0 1 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 69 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 2 0 0 0 70 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 71 0 1
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 72 0
+0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 71
+
+a b c d e f g h i j k l mn o p q r s t u v w x y z
+Predicted label
+
+70
+60
+50
+40
+30
+20
+10
+0
+
+Figure 5. Confusion matrix—Experiment 1.
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+13 of 23
+
+3.2. Experiment 2: Keystroke Recognition in Controlled Conditions
+The data used in this experiment were collected under conditions similar to those of
+the training data, using the same equipment (Fnatic Gear Rush keyboard and Novox NC1
+microphone). This dataset had not been previously used during model training, validation
+or testing. At least 30 samples were prepared for each of the 26 letters of the alphabet,
+however, the recording conditions may have differed slightly from the original ones, e.g.,
+in terms of microphone positioning or keypress force. Out of a total of 816 samples, the
+model correctly classified 592, corresponding to an overall accuracy of 72.55%. Considering
+that the data comes from new, previously unseen recordings, this result is encouraging and
+confirms the model’s ability to generalise. The confusion matrix (Figure 6) further indicates
+that several letters are recognised almost flawlessly.
+
+True label
+z y x w v u t s r q p o nm l k j i h g f e d c b a
+
+Confusion Matrix (Counts)
+
+35 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+0 21 1 0 0 0 0 0 0 0 0 0 0 11 0 0 0 0 0 0 0 0 0 0 1 0
+0 0 8 1 0 0 0 0 0 0 0 0 0 0 0 0 1 0 1 0 0 0 0 7 0 15
+0 0 1 16 3 1 0 0 1 0 0 0 0 0 0 0 0 2 2 1 0 0 3 0 0 0
+0 0 0 0 35 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 26 0 0 0 0 0 0 0 0 0 0 0 4 0 0 0 0 0 0 0 0
+0 1 0 0 0 0 26 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 2 0
+0 0 0 0 0 0 0 30 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 22 0 0 0 1 1 0 1 0 0 0 0 10 0 0 0 0 0
+0 1 0 0 0 0 0 0 0 4 3 0 1 21 0 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 1 0 17 0 3 7 1 0 0 0 0 0 1 0 0 0 0 0
+0 0 0 0 0 0 1 0 0 0 11 13 0 0 5 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 1 0 0 0 20 9 0 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 30 0 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 6 0 4 3 0 0 28 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 3 27 0 0 0 0 0 0 0 0 0 0
+0 0 0 1 1 0 0 0 0 0 0 0 0 0 0 0 27 0 0 0 0 0 1 0 0 0
+0 0 0 0 2 0 0 0 0 0 0 0 0 0 0 0 0 28 0 1 0 0 0 0 1 0
+0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 2 0 22 0 0 0 5 0 0 0
+0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 1 0 19 0 1 0 0 8 0
+0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 31 0 0 0 1 0
+0 6 0 0 0 2 4 0 0 0 0 0 1 0 0 0 0 0 0 0 0 14 1 2 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 1 0 0 0 26 0 0 0
+0 1 1 2 0 0 0 1 0 0 0 0 1 0 0 0 6 0 0 0 0 0 1 16 0 1
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 30 0
+5 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 2 0 0 0 0 1 0 21
+
+a b c d e f g h i j k l mn o p q r s t u v w x y z
+Predicted label
+
+35
+30
+25
+20
+15
+10
+5
+0
+
+Figure 6. Confusion matrix—Experiment 2.
+
+The vast majority of correct predictions are located along the diagonal of the matrix,
+indicating the dominance of correct assignments. For example, the classes “a”, “e”, “h”,
+“n” and “y” were recognised correctly in all instances, while the letters “p”, “q”, “r”, “u”
+and “w” had single errors, suggesting that their acoustic signals are particularly distinctive.
+However, despite 100% accuracy in predicting this letter, class “n” has a very low precision
+value of 38%, which means that this class is often selected as a safe choice when the model
+does not see clear features of other classes. In contrast, letters such as “j”, “n”, “v” and “c”
+present much greater difficulties. One of the most difficult classes turned out to be the letter
+“j”, for which the model achieved a precision of 1.00, but a very low recall of only 13%. This
+suggest that the model was only confident in a few cases, and when it did identify “j”,
+it was usually correct. The confusion matrix also reveals patterns of frequent confusion
+between specific letter pairs. For example, the letters “c” and “x” and “c” and “z” where
+such errors may result from the acoustic similarity of the sounds, which is the position
+of these keys on the left side of the keyboard, close to the microphone, where adjacent
+keys can cause similar clicks. A similar situation occurred with the pair “k”–“l”, which
+were confused with each other due to similar acoustic characteristics. Overall, these results
+confirm the model’s overall ability to generalise but suggest that the greatest challenges for
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+14 of 23
+
+the model arise from the acoustic similarity between certain keys, especially those located
+in close physical proximity on the keyboard.
+3.3. Experiment 3: Impact of Background Interference on Keystroke Recognition
+To evaluate the trained model’s robustness to interference and its ability to recognize
+keystroke sounds under noisy conditions, a second experiment was conducted with added
+artificial background noise. The recordings for this experiment were prepared analogously
+to the earlier ones, using a microphone placed approximately 30 cm from the sound source.
+The key difference here was the presence of additional external noise. To simulate realistic
+environmental conditions, we used a publicly available crowd-noise recording (“Crowd
+Noise 1 Hour White Noise”), was used to approximate typical background disturbances.
+The noise source was positioned approximately 50 cm from the microphone, reflecting
+common real-world scenarios in which the recorded sounds co-occur with ambient noise,
+such as background conversations. This experiment complements the previous tests, which
+were carried out in silence or with minimal acoustic interference.
+A total of 861 samples were evaluated, of which 435 were classified correctly. The
+final classification accuracy under these conditions was 50.52%, which is a significant
+decrease compared to tests conducted on clean recordings, where the result was over
+72%. The reduced effectiveness demonstrates the model’s vulnerability to noise, even
+though many classes still achieved noticeable quality metrics. A detailed analysis shows
+that some letters, such as “a”, “e”, “s” and “w”, were classified relatively well despite
+the presence of interference. For example, the letter “e” was correctly classified 32 times
+out of 35 recordings, suggesting that the sounds of this key have particularly distinctive
+acoustic characteristics. On the other hand, some classes, especially “j”, “b”, “c”, “d” and
+“m”, showed a drastic deterioration. For the letter “j”, the recall dropped to only 4%,
+meaning that nearly all occurrences of this class were misclassified. The results presented
+in the confusion matrix (Figure 7) indicate an increase in the number of misclassifications,
+suggesting that the model more often chooses “safe” classes that are similar to many others.
+For instance, the letter “r” was incorrectly predicted for as many as seven other classes,
+but at the same time it was correctly recognised in 93% of cases, which may mean that the
+model tends to favor this class when uncertainty is high.
+It is worth noting that although Gaussian noise was used for data augmentation
+during model training, this approach may have been insufficient to capture the complexity
+of the realistic disturbances present in this experiment. Synthetic noise does not fully
+reflect the complexity and variability of noises recorded in a real environment. The lack
+of real-world examples of disturbances in the training set may have limited the model’s
+ability to generalise effectively under such conditions.
+At the same time, it should be noted that despite the observed performance degradation, the accuracy achieved under noisy conditions exceeds 50%. This indicates that
+the model has learned the essential acoustic features for many classes and can reproduce
+them even in under less favorable. This demonstrates its partial resilience and may provide
+a good basis for further improvement, e.g., by applying more advanced augmentation
+techniques or including samples with realistic noise in the training. This experiment shows
+that although a model trained in clean conditions can recognise some classes even in the
+presence of interference, its effectiveness drops in a more realistic, noisy environment.
+This finding highlights important limitations of the current approach and points to clear
+directions for enhancing the model’s robustness to signal degradation in future work.
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+15 of 23
+
+True label
+z y x w v u t s r q p o nm l k j i h g f e d c b a
+
+Confusion Matrix (Counts)
+
+34 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0
+0 8 0 0 0 0 5 5 0 0 0 0 0 18 0 0 0 0 0 0 3 1 0 0 0 0
+0 0 6 1 0 0 0 0 0 0 0 0 0 0 1 0 11 0 2 0 0 1 1 7 0 0
+0 0 1 8 1 0 0 0 0 0 0 0 0 0 0 0 2 6 1 0 0 0 11 0 0 0
+0 0 0 0 32 0 0 0 0 0 0 0 0 0 0 0 0 2 1 0 0 0 0 0 0 0
+0 0 0 0 0 12 1 0 0 0 0 0 0 0 0 0 0 14 0 0 0 0 1 0 2 0
+0 0 0 0 0 0 14 0 0 0 0 0 0 1 1 0 0 4 0 5 2 0 0 0 3 0
+0 1 0 0 0 0 1 12 0 0 0 0 0 7 0 0 0 1 0 0 4 0 0 0 4 0
+0 0 0 0 0 0 0 0 24 0 4 0 0 7 2 0 0 0 0 0 2 0 0 0 0 0
+0 1 0 0 0 0 0 0 1 2 6 0 0 15 2 0 0 5 0 0 14 0 0 0 0 0
+0 0 0 0 0 0 0 1 2 0 15 0 0 1 4 0 0 3 0 0 4 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 5 7 0 0 16 0 0 2 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 2 0 4 1 16 17 2 0 0 0 0 0 6 0 0 0 0 0
+0 0 0 0 0 0 0 0 1 0 1 1 0 35 0 0 0 1 0 0 0 0 0 0 1 0
+0 0 0 0 0 0 0 0 2 0 5 3 0 1 23 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 3 0 1 12 11 0 1 0 0 0 0 0 0 0 0
+3 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 25 0 1 0 0 0 1 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 28 0 1 0 0 0 0 0 0
+0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 25 0 0 0 4 0 0 0
+0 0 0 0 0 0 3 0 0 0 2 0 0 0 0 0 0 14 0 9 2 0 0 0 4 0
+0 0 0 0 0 0 0 0 3 0 1 0 0 7 1 0 0 0 0 0 16 0 0 0 2 0
+1 0 0 0 0 0 8 0 0 0 2 0 0 0 0 2 2 3 1 1 0 8 0 2 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 2 3 0 0 0 24 0 0 1
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 16 0 0 0 0 0 1 5 0 8
+0 0 0 0 0 0 2 0 0 0 0 0 0 0 1 0 0 2 0 0 5 0 0 0 20 0
+3 0 0 0 0 0 0 0 0 0 0 0 0 0 0 3 6 0 1 0 0 0 1 0 0 16
+
+a b c d e f g h i j k l mn o p q r s t u v w x y z
+Predicted label
+
+35
+30
+25
+20
+15
+10
+5
+0
+
+Figure 7. Confusion matrix—Experiment 3.
+
+3.4. Experiment 4: Keystroke Recognition on a Different Keyboard Type
+To assess the model’s ability to generalize to data from a different source, an additional
+experiment was performed using sound recordings from a second keyboard (Anne Pro 2).
+The recording environment for this experiment was maintained in conditions similar to
+those used in the first stage of the study. The recordings were made in the same quiet room,
+which allowed for low background noise levels and ensured consistency between the data
+sets. The microphone was again placed approximately 30 cm from the keyboard, and its
+position remained unchanged throughout the recording session. The primary difference
+relative to the first experiment was the use of a different mechanical keyboard model, the
+Anne Pro 2. It important to note that the base model was trained exclusively on data from
+the first keyboard (Fnatic Gear Rush) and therefore had no prior exposure to the acoustic
+characteristics of the second device.
+An initial attempt to apply the previously trained model to Anne Pro 2 keyboard
+ended in complete failure. The model achieved an accuracy of approximately 5% accuracy,
+which is similar to random guessing across 26 classes. The predictions were chaotic and
+inconsistent, and the system showed no ability to correctly recognise sounds in the new
+environment. This result clearly shows that even relatively small acoustic differences
+between devices resulting, for example, from different designs, materials or component
+placement can significantly affect signal characteristics and prevent effective recognition
+when the model has not been exposed to such variability.
+To address this issue, we performed fine-tuned of the pre-trained CNN from Experiment 1. The entire network remained trainable (no layers were frozen) and no new top
+layers were introduced. The input consisted of mel-spectrogram features, with the original
+input shape and label mapping preserved to ensure compatibility with the base model.
+Training was performed using the Adam optimizer with a learning rate of 1 × 10−5 , a
+batch size of 32, and the sparse categorical cross-entropy loss, employing an 80/20 train–
+validation split. For this purpose, 15 recordings were used per key on the Anne Pro 2
+keyboard. Training was scheduled for 300 epochs with an EarlyStopping criterion that
+monitored validation accuracy. By epoch 280, the model achieved 97.12% accuracy with a
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+16 of 23
+
+loss of 0.20 on the training set and 90.43% accuracy with a loss of 0.38 on the validation
+set. This fine-tuning approach enabled the model to adapt to the new acoustic conditions
+without the need to retrain it from scratch. A detailed analysis of accuracy and loss trends
+is presented in Figure 8.
+
+Figure 8. Fine-tuning curves.
+
+After retraining the model using a limited number of samples from the new keyboard,
+the model achieved a substantial improvement in classification performance was observed.
+The total number of samples tested was 795, of which 652 were correctly classified, resulting
+in an overall accuracy of 82.01%. Compared to the original results, the improvement
+achieved is very significant and shows that even a small number of new training samples
+is sufficient to effectively adapt the model to a new acoustic environment. The analysis of
+the confusion matrix (Figure 9) indicates that the model is able to accurately distinguish
+most character classes, with correct predictions predominantly concentrated along the main
+diagonal, reflecting high classification accuracy for the majority of labels.
+
+True label
+z y x w v u t s r q p o nm l k j i h g f e d c b a
+
+Confusion Matrix (Counts)
+
+19 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 15
+0 30 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+0 1 23 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 4 0 1 0 0
+0 0 0 26 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 2
+0 0 0 2 22 0 0 0 0 0 0 0 0 0 0 0 0 3 0 1 0 2 0 0 0 0
+0 0 0 3 0 23 0 0 0 0 0 0 0 0 0 0 0 3 0 0 0 1 0 0 0 0
+0 0 0 0 0 0 27 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 2
+0 0 0 0 0 0 0 28 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 23 0 0 0 2 2 1 0 0 0 0 0 1 0 0 0 0 1
+0 0 0 0 0 0 0 0 0 28 0 0 1 3 0 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 33 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 2 22 0 1 2 2 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 26 3 0 0 0 0 0 0 0 0 0 0 0 0
+0 1 0 0 0 0 0 0 0 0 0 0 0 32 0 0 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 1 0 0 0 0 24 7 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 2 31 0 0 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 22 0 0 0 0 0 0 0 0 10
+0 1 0 1 0 0 0 0 0 0 0 0 2 2 1 0 0 23 0 0 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 2 0 0 0 0 25 0 0 0 0 0 0 3
+0 1 0 0 0 0 0 1 0 0 0 0 0 4 0 0 0 2 0 22 0 0 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 7 0 0 0 0 0 0 26 0 0 0 0 0
+0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 28 0 0 0 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 6 0 0 0 17 0 0 7
+0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 21 0 5
+0 0 0 0 0 0 0 1 0 0 0 0 0 6 0 0 0 0 0 0 1 0 0 0 19 1
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 32
+
+a b c d e f g h i j k l mn o p q r s t u v w x y z
+Predicted label
+
+30
+
+25
+
+20
+
+15
+
+10
+
+5
+
+0
+
+Figure 9. Confusion matrix—Experiment 4.
+
+Misclassifications still occur sporadically for certain character pairs (e.g., “a” and “z”,
+“q” and “x”), but their number has been significantly reduced compared to the results before
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+17 of 23
+
+tuning. Additionally, for difficult sounds that it was unable to handle, the model often
+suggested the letter “z”. Overall, this process confirms the effectiveness of this technique
+in the context of adapting the sound model to a new input device. Despite the acoustic
+differences between the keyboards, the model was able to recover its predictive capability
+and achieve a high level of classification accuracy after retraining.
+
+4. Discussion
+This study demonstrates that identifying keystrokes from their acoustic signatures is
+a realistic and effective attack vector, particularly under conditions similar to those used
+during training. The experiments demonstrate that, even with limited data, the model
+can achieve strong performance, which can be further improved by adapting it to new
+conditions. At the same time, while background noise substantially degrades the attack’s
+effectiveness, but it does not completely prevent keystroke recognition.
+The conducted research shows that recognizing keystrokes solely from their acoustic
+signatures is feasible using a lightweight CNN operating on mel-spectrograms representations, and that the method’s performance can be systematically improved through simple
+adaptation procedures. The principal contribution is a complete, experimentally validated
+pipeline from recording keystroke clicks, through mel-spectrogram representation, to classification and adaptation to new conditions, together with a clear demonstration of how
+environmental and hardware factors influence accuracy. The contribution of this work
+is to show that, even with a limited amount of data, it is possible to achieve respectable
+classification performance. Figure 10 summarises the experimental results, showing that
+the baseline model achieved 96% accuracy on the test set. Under controlled conditions, the
+model reached 73% accuracy across 26 classes, which confirms the practical detectability of
+the signals. With background noise present, accuracy dropped to 50%, which still indicates
+partial attack effectiveness in less favorable conditions. Crucially, we also demonstrate
+adaptive potential where after brief fine-tuning on a small dataset from a different keyboard, accuracy reached 82% on data from the new device, showing that the model can
+be efficiently adapted to new acoustic characteristics without retraining from scratch. The
+experimental results also highlight that background noise has a substantial impact on classification accuracy, significantly limiting the applicability of the proposed model in highly
+interfered acoustic environments, such as crowded public spaces or compressed audio
+streams during video calls. This sensitivity is consistent with prior work on acoustic sidechannel attacks and reflects the inherently low signal-to-noise ratio of keystroke sounds
+under realistic conditions. Importantly, this limitation does not invalidate the feasibility of
+the attack itself, but rather delineates its operational boundaries. As clarified in the threat
+model, the proposed approach is most applicable in scenarios involving a targeted attacker
+with proximity to the victim’s keyboard and partial control over recording conditions (e.g.,
+office desks, shared workspaces, or personal devices). In contrast, the crowd-noise and
+cross-device experiments represent constrained adversarial settings and are intended to
+quantify performance degradation under less favorable conditions rather than to claim
+universal robustness.
+Additionally, the dataset we collected has been made publicly available on Zenodo,
+https://doi.org/10.5281/zenodo.17536616, accessed on 31 December 2025 together with
+short video materials demonstrating the data acquisition procedure. These resources can
+serve as a starting point for researchers interested in acoustic side-channel attacks.
+The principal limitation of this study is the absence of explicit sequence modeling.
+The system classifies isolated keystrokes rather than decoding continuous key sequences,
+which is necessary for reconstructing readable text. In addition, the study is constrained by
+limited dataset diversity (one participant and a small set of devices) and shows sensitivity
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+18 of 23
+
+to environmental variation, including background noise, microphone placement, and
+keyboard model. Consequently, model performance depends strongly on the similarity
+between the training and test domains.
+
+Comparison of Accuracy, Precision, and Recall for Experiments
+1.0
+
+0.96 0.97 0.96
+
+0.8
+
+Accuracy
+0.73
+
+0.76
+
+Precision
+0.82
+
+0.88
+
+Recall
+0.82
+
+0.73
+0.65
+
+Values
+
+0.6
+
+0.51
+
+0.51
+
+0.4
+0.2
+0.0
+
+Experiment 1
+
+Experiment 2
+Experiment 3
+Experiments
+
+Experiment 4
+
+Figure 10. Experiments comparison.
+
+All recordings used in this study were collected from a single participant, which represents a clear limitation with respect to inter-user variability and generalization. Individual
+differences in typing style, finger usage, strike force, and hand posture can influence the
+acoustic characteristics of keystroke sounds and may affect classification performance
+when models are applied to unseen users. This design choice was intentional and aligned
+with the pilot-study character of the work. The objective was not to develop a universally
+generalizable attack model, but rather to investigate feasibility, identify dominant acoustic
+factors, and establish a robust and reproducible processing and modeling pipeline. Within
+this constrained setting, the model exhibited consistent and interpretable behavior across
+four experimental scenarios, including unseen samples, background noise, and cross-device
+evaluation, supporting the validity of the observed trends. To promote transparency and
+further research, the complete dataset has been publicly released. Future work will explicitly address this limitation by extending data collection to multiple users, additional
+keyboard types, varied microphone distances, and more realistic acoustic environments,
+as discussed in the Future Work section. Beyond data-related limitations, the current
+study focuses on isolated keystroke classification and does not explicitly model temporal
+dependencies between consecutive keystrokes. While this setting is sufficient for feasibility
+analysis and controlled evaluation, it does not support stable reconstruction of complete
+text strings, which would be required for realistic real-time acoustic attack scenarios. Future
+work should therefore extend the current framework toward sequence-based modeling
+by incorporating temporal context and linguistic constraints. Potential directions include
+the use of Hidden Markov Models, recurrent neural networks, temporal convolutional
+networks, or transformer-based sequence models, as well as post-processing stages that
+leverage language models or dictionary-based decoding. Such extensions would allow the
+transition from single-keystroke recognition to continuous text reconstruction and provide
+a more accurate assessment of practical attack feasibility.
+The Table 3 shows that it is not necessary to use very large models for the task of recognising keys from sound. In our work, we used a small convolutional neural network (CNN)
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+19 of 23
+
+on melspectrograms, and yet we achieved 96% accuracy on the test set and 72% in the experiment with independently recorded samples. These findings demonstrate that a lightweight
+architecture, with a well-chosen representation and learning procedure, gives decent and
+repeatable results in this field, without the need to immediately resort to complex architectures such as CoAtNet [9]. Compared to the “Practical Deep Learning-Based Acoustic Side
+Channel Attack on Keyboards” [9] publication, which also worked with melspectrograms,
+their system achieved higher results in experiments (95% telephone, 93% Zoom), but our
+experiment had a larger number of samples per class (30 vs. 5), which makes the task
+more demanding and better reflects the diversity of recordings. Moreover, Harrison et al.
+employ a substantially different methodological pipeline, based on the large-scale CoAtNet
+architecture featuring convolutional layers combined with self-attention mechanisms. Their
+training process requires extensive hyperparameter exploration (500–1100 epochs, variable
+learning-rate schedules), SpecAugment-based time–frequency masking, and two distinct
+acoustic channels—direct smartphone recordings and Zoom VoIP transmissions—each
+introducing characteristic distortions. These differences in data diversity, signal degradation, model scale and training complexity make direct comparison of raw accuracy values
+inherently limited. In turn, compared to the “I Know Your Keyboard Input: A Robust
+Keystroke Eavesdropper Based on Acoustic Signals.” [21] publication, we achieved similar
+global accuracy (96% vs. 92%) and a similar experiment result, but it is important to note
+a significant difference, where result of 71.24% refers to “unknown users” with the same
+keyboard class, while in our experiment, 72% was conducted on a user known to the model.
+At the same time, Bai’s work offers a more extensive environmental pipeline (multiple keyboards, numerous microphone positions, geometry estimation, and TDoA/PSD features),
+which broadens the scope of generalisation. Specifically, Bai et al. integrate a multi-stage
+attack system involving microphone–keyboard position estimation (via CMA-ES), identification of large-size keys, extraction of TDoA and PSD as handcrafted features, and
+SVM-based classification across 9 users, 9 keyboards and 37 environmental configurations.
+Their experimental conditions therefore differ fundamentally from deep-learning-based
+pipelines: they operate on dual-microphone geometric cues rather than spectral representations, and tackle multi-user and multi-device generalisation, making raw accuracy
+values methodologically non-equivalent. In summary, our work is an introduction to
+the topic of acoustic key recognition. It shows that a small CNN model can provide a
+solid basis for results and be a starting point for further research, including expanding
+the number of users and devices, incorporating sequence modelling, and more advanced
+environmental adaptation procedures. Unlike prior studies that rely on large pretrained
+architectures such as CoAtNet, Vision Transformers, or hybrid models augmented with
+LLM-based post-processing, this work introduces a newly designed lightweight CNN
+tailored specifically for keystroke-sound recognition. The model contains only a small
+number of parameters, yet achieves competitive accuracy, demonstrating that effective
+acoustic side-channel attacks do not require computationally intensive architectures. This
+significantly lowers the practical barrier for real-world exploitation. To further illustrate the
+feasibility of low-resource attacks, we applied dynamic range quantization, reducing model
+size and computational requirements with minimal accuracy degradation-an approach not
+explored in previous research. Moreover, by evaluating the model under four increasingly
+challenging scenarios (clean environment, new clean recordings, background noise, and a
+different keyboard), we provide a broader and more realistic assessment of its robustness
+compared to existing studies.
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+20 of 23
+
+Table 3. Comparison of datasets and results across three studies.
+
+Property
+
+This Study
+
+I Know Your Keyboard
+Input: A Robust
+Keystroke Eavesdropper
+Based on Acoustic Signals
+[21]
+
+Characters
+
+a–z
+
+a–z, 6 large keys
+
+a–z, 0–9
+
+Samples per key
+
+60
+
+10 1
+
+25
+
+Keyboard type
+
+Mechanical Fnatic Gear
+Rush
+
+9 keyboards (5 mechanical,
+2 membrane, 2 laptop)
+
+Laptop keyboard
+(MacBook Pro, 2021)
+
+Feature extraction
+
+Mel-spectrogram
+
+MFCC, TDoA, PSD
+
+Mel-spectrogram
+
+Model architecture
+
+CNN
+
+SVM
+
+CoAtNet
+
+Accuracy
+
+96%
+
+92% 2
+
+96%
+
+Experiment accuracy
+
+72%
+
+71.24% 3
+
+95% (phone), 93% (Zoom) 4
+
+Experiment samples per
+key
+
+30
+
+-
+
+5
+
+Practical Deep
+Learning-Based Acoustic
+Side Channel Attack on
+Keyboards [9]
+
+1 10 samples per key, for each of the 9 environments. 2 10-fold cross-validation (known keyboard type and mic
+
+placement). 3 Final test accuracy on unknown users and same keyboard type. 4 Final test accuracy on unseen data
+for phone and Zoom setups.
+
+Key directions for further development include expanding the dataset to encompass
+multiple users, a broader range of microphones and keyboards, and more diverse acoustic
+conditions. Another priority is to add sequence modeling to move from single-keystroke
+classification to stable reconstruction of character strings, and to apply stronger augmentation alongside other techniques to improve generalization. Pursuing this agenda should
+produce a more robust and scalable system and to support a more precise assessment of
+acoustic attack risk for practical deployments and security policy contexts.
+Acoustic side-channel attacks pose a real and growing threat to data confidentiality,
+making effective countermeasures increasingly important. Mitigation strategies should
+therefore be considered across multiple layers, combining user practices, hardware design,
+and software-based controls. At the user level, it is advisable to avoid entering sensitive information while microphones are active (e.g., during video calls), to rely on strong randomly
+generated passwords combined with multi-factor authentication, and to use password managers to minimize the number of physical keystrokes required for authentication. Raising
+user awareness through targeted training and clearly defined security procedures remains
+a critical factor in reducing exposure to such attacks. From an environmental and hardware
+perspective, reducing acoustic leakage at the source can significantly limit attack feasibility. This includes the use of low-emission or dampened input devices, keyboards with
+vibration-absorbing materials, and internal acoustic insulation that reduces resonance and
+sound propagation. In high-risk situations, signal masking through controlled background
+audio may further reduce the signal-to-noise ratio of keystroke sounds. When feasible,
+microphones should be physically disconnected, muted at the hardware level, or isolated
+from the typing environment. At the software and system level, defensive measures include
+strict management of microphone permissions, continuous monitoring for anomalous or
+unauthorized recording activity, and the enforcement of a consistent privacy posture across
+all devices, including computers, smartphones, voice assistants, and cameras. Beyond conventional masking techniques, more advanced approaches may involve intentional acoustic
+obfuscation or controlled signal randomization at the source. Rather than merely adding
+noise, such mechanisms aim to deliberately alter the temporal or spectral characteristics
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+21 of 23
+
+of keystroke emissions in a structured manner, thereby reducing their interpretability by
+unauthorized listeners. From a longer-term technological perspective, emerging defensive
+concepts may be viewed as forms of acoustic encryption. Potential examples include
+keyboards that introduce pseudo-random yet reversible acoustic variations during key
+presses, firmware-level modulation of vibration patterns, or operating-system–assisted
+acoustic obfuscation synchronized with typing activity. While such approaches remain
+largely unexplored and may introduce trade-offs between usability, performance, and
+security, they represent a promising direction for mitigating acoustic side-channel leakage
+at a fundamental level. Taken together, these complementary measures do not eliminate
+acoustic side-channel risks entirely but can substantially hinder the capture, analysis, and
+exploitation of keyboard acoustics in practical attack scenarios.
+Summarizing our findings, this pilot study introduces several contributions that
+complement and extend existing research on acoustic side-channel attacks:
+•
+
+•
+
+•
+
+•
+
+•
+
+•
+
+•
+
+Lightweight CNN architecture: We designed a custom convolutional neural network specifically tailored for keystroke-sound classification. Unlike prior works
+relying on large pretrained models (e.g., CoAtNet, Vision Transformers), our approach demonstrates that high accuracy can be achieved with a compact, resourceefficient architecture.
+Dedicated dataset and public release: We collected and publicly released a keystrokesound dataset recorded on two mechanical keyboards under multiple conditions
+(clean recordings, background noise, cross-device setup). The availability of this
+dataset supports reproducibility and future benchmarking.
+Complete preprocessing pipeline: We developed an end-to-end audio processing pipeline including Fourier transform, mel-spectrogram generation, time-shift
+augmentation, spectrogram masking, and feature extraction optimised for CNNbased classification.
+Evaluation across four realistic scenarios: We conducted a systematic evaluation
+covering (i) clean data, (ii) unseen samples from the same setup, (iii) added crowd
+noise, and (iv) a different keyboard model, providing insights into robustness and
+generalisation capabilities.
+Post-training dynamic range quantization: We applied model quantization to reduce
+size and computational cost, showing minimal accuracy loss. To our knowledge,
+quantization has not been explored in prior acoustic keystroke-recognition studies,
+making it a novel contribution regarding deployability.
+Security perspective and mitigation: We discuss attacker capabilities within a defined
+threat model and outline a potential mitigation strategy based on audio masking and
+controlled noise injection.
+Directions for future work: We highlight several key avenues for further research,
+including the collection of multi-user datasets, the use of a wider range of keyboard
+types, the inclusion of varied microphone distances, the application of domainadaptation techniques, sequence-based decoding approaches, and the evaluation
+of model robustness in more realistic adversarial environments. In particular, future work should systematically analyse the impact of different noise categories (e.g.,
+speech, music, office ambience, concurrent typing) and varying signal-to-noise ratios,
+as these factors are expected to influence classification accuracy in real-world scenarios.
+Additionally, extending the current framework toward continuous, sequence-based
+text reconstruction would enable a more realistic assessment of practical attack scenarios, including near real-time acoustic eavesdropping. Integrating temporal modeling
+and linguistic constraints may significantly improve the stability and interpretability
+of reconstructed text streams.
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+22 of 23
+
+5. Conclusions
+In this study, we developed a convolutional neural network operating on melspectrogram representations to recognize individual keystrokes from their acoustic signatures, with the goal of reconstructing typed text. The proposed pipeline covered data
+collection and labeling, mel-spectrogram feature extraction, and a compact CNN architecture followed by post-training optimization. The model achieved 96.9% accuracy on the
+test set. In controlled, quiet conditions it reached 73% accuracy across 26 letter classes with
+background crowd noise accuracy was 50%. When the keyboard hardware was changed, a
+small amount of additional training on recordings from the new device raised accuracy
+to 82%, showing that the model can adapt without retraining from scratch. These results
+confirm the feasibility of acoustic keystroke recognition with lightweight CNNs and point
+to a practical path toward deployment. Future work should add explicit sequence modeling
+and language constraints, expand the dataset to more users, devices, and environments,
+and explore stronger robustness methods for real-world applications.
+Author Contributions: Conceptualization, M.R. and A.N.; methodology, M.R. and A.N.; software,
+M.R.; validation, M.R., A.N.; formal analysis, A.N.; investigation, M.R.; resources, M.R.; data curation,
+M.R.; writing—original draft preparation, M.R., W.K. and A.N.; writing—review and editing, M.R.,
+W.K. and A.N.; visualization, M.R.; supervision, A.N.; project administration, A.N. All authors have
+read and agreed to the published version of the manuscript.
+Funding: This research received no external funding.
+Institutional Review Board Statement: Not applicable.
+Informed Consent Statement: Not applicable.
+Data Availability Statement: The recordings collected during the experiment have been made
+publicly available on the Zenodo platform at https://doi.org/10.5281/zenodo.17536616.
+Conflicts of Interest: The authors declare no conflicts of interest.
+
+References
+1.
+2.
+3.
+4.
+5.
+6.
+
+7.
+8.
+9.
+
+10.
+
+DataReportal/Kepios. Digital Around the World. 2025. Available online: https://datareportal.com/global-digital-overview
+(accessed on 15 October 2025).
+Nawaz, N.A.; Ishaq, K.; Farooq, U.; Khalil, A.; Rasheed, S.; Abid, A.; Rosdi, F. A comprehensive review of security threats and
+solutions for the online social networks industry. PeerJ Comput. Sci. 2023, 9, e1143. [CrossRef] [PubMed]
+Assaeedi, J.; Alsuwat, H. Side-Channel Attacks Detection Methods: A Survey. Int. J. Comput. Sci. Netw. Secur. (IJCSNS) 2022,
+22, 288–296. [CrossRef]
+Vuagnoux, M.; Pasini, S. Compromising electromagnetic emanations of wired and wireless keyboards. In Proceedings of the 18th
+Conference on USENIX Security Symposium, Montreal, QC, Canada, 10–14 August 2009; SSYM’09; pp. 1–16.
+Bommana, S.R.; Veeramachaneni, S.; Ershad, S.; Srinivas, M. Mitigating side channel attacks on FPGA through deep learning and
+dynamic partial reconfiguration. Sci. Rep. 2025, 15, 13745. [CrossRef] [PubMed]
+Mehrnezhad, M.; Toreini, E.; Shahandashti, S.F.; Hao, F. TouchSignatures: Identification of User Touch Actions based on Mobile
+Sensors via JavaScript. In Proceedings of the 10th ACM Symposium on Information, Computer and Communications Security,
+Singapore, 14 April–17 March 2015; ASIA CCS ’15; p. 673. [CrossRef]
+Mehrnezhad, M.; Toreini, E.; Shahandashti, S.F.; Hao, F. TouchSignatures: Identification of user touch actions and PINs based on
+mobile sensor data via JavaScript. J. Inf. Secur. Appl. 2016, 26, 23–38. [CrossRef]
+Yuan, J.; Zhang, J.; Qiu, P.; Wei, X.; Liu, D. A Survey of of Side-Channel Attacks and Mitigation for Processor Interconnects. Appl.
+Sci. 2024, 14, 6699. [CrossRef]
+Harrison, J.; Toreini, E.; Mehrnezhad, M. A Practical Deep Learning-Based Acoustic Side Channel Attack on Keyboards. In
+Proceedings of the 2023 IEEE European Symposium on Security and Privacy Workshops (EuroSamp;PW), Delft, The Netherlands,
+3–7 July 2023; pp. 270–280. [CrossRef]
+Ayati, S.A.; Park, J.H.; Cai, Y.; Botacin, M. Making acoustic side-channel attacks on noisy keyboards viable with LLM-assisted
+spectrograms’ “Typo” correction. In Proceedings of the 19th USENIX Conference on Offensive Technologies, Seattle, WA, USA,
+11–12 August 2025; WOOT ’25.
+
+https://doi.org/10.3390/app16020563
+
+Appl. Sci. 2026, 16, 563
+
+11.
+12.
+13.
+14.
+
+15.
+16.
+17.
+
+18.
+19.
+20.
+
+21.
+
+22.
+
+23.
+24.
+
+23 of 23
+
+Rathod, A.; Patel, K.S. Review of Side Channel Attacks and Comparison of Masking and Re-keying Countermeasures. J. Electr.
+Syst. (JES) 2024, 20.
+Bewley, T. Spycatcher (The candid autobiography of a Senior Intelligence Officer). By Peter Wright. New York: Viking Penguin.
+1987. Pp 392. Psychiatr. Bull. 1989, 13, 217–219. [CrossRef]
+Taheritajar, A.; Harris, Z.M.; Rahaeimehr, R. A Survey on Acoustic Side Channel Attacks on Keyboards. In International Conference
+on Information and Communications Security; Springer Nature: Singapore, 2024.
+Anand, S.A.; Shrestha, P.; Saxena, N. Bad Sounds Good Sounds: Attacking and Defending Tap-Based Rhythmic Passwords Using
+Acoustic Signals. In Cryptology and Network Security; Springer International Publishing: Cham, Switzerland, 2015; pp. 95–110.
+[CrossRef]
+Deshmukh, A.; Ravulakollu, K. An Efficient CNN-Based Intrusion Detection System for IoT: Use Case Towards Cybersecurity.
+Technologies 2024, 12, 203. [CrossRef]
+Alabsi, B.; Anbar, M.; Rihan, S. CNN-CNN: Dual Convolutional Neural Network Approach for Feature Selection and Attack
+Detection on Internet of Things Networks. Sensors 2023, 23, 6507. [CrossRef] [PubMed]
+Warmiński, G.; Sadowski, K.A.; Kalinczuk, L.; Orczykowski, M.; Urbanek, P.; Bodalski, R.; Hasiec, A.; Gandor, M.; Pałka, F.;
+Sajnok, K.; et al. Artificial intelligence analysis of ECG signals to predict arrhythmia recurrence after ablation of atrial fibrillation.
+Pol. Heart J. 2025, 83, 496–498. [CrossRef] [PubMed]
+Tuncer, T.; Barua, P.D.; Tuncer, I.; Dogan, S.; Acharya, U.R. A lightweight deep convolutional neural network model for skin
+cancer image classification. Appl. Soft Comput. 2024, 162, 111794. [CrossRef]
+Chu, H.C.; Zhang, Y.L.; Chiang, H.C. A CNN Sound Classification Mechanism Using Data Augmentation. Sensors 2023, 23, 6972.
+[CrossRef] [PubMed]
+Purkovic, S.; Jovanovic, L.; Zivkovic, M.; Antonijevic, M.; Dolicanin, E.; Tuba, E.; Tuba, M.; Bacanin, N.; Spalevic, P. Audio analysis
+with convolutional neural networks and boosting algorithms tuned by metaheuristics for respiratory condition classification. J.
+King Saud Univ.-Comput. Inf. Sci. 2024, 36, 102261. [CrossRef]
+Bai, J.X.; Liu, B.; Song, L. I Know Your Keyboard Input: A Robust Keystroke Eavesdropper Based-on Acoustic Signals. In
+Proceedings of the 29th ACM International Conference on Multimedia, Virtual Event, 20–24 October 2021; MM ’21; pp. 1239–1247.
+[CrossRef]
+Compagno, A.; Conti, M.; Lain, D.; Tsudik, G. Don’t Skype & Type!: Acoustic Eavesdropping in Voice-Over-IP. In Proceedings of
+the 2017 ACM on Asia Conference on Computer and Communications Security, Abu Dhabi, United Arab Emirates, 2–6 April
+2017; ASIA CCS ’17; pp. 703–715. [CrossRef]
+Mumuni, A.; Mumuni, F. Data augmentation: A comprehensive survey of modern approaches. Array 2022, 16, 100258. [CrossRef]
+Zhao, X.; Wang, L.; Zhang, Y.; Han, X.; Deveci, M.; Parmar, M. A review of convolutional neural networks in computer vision.
+Artif. Intell. Rev. 2024, 57, 99. [CrossRef]
+
+Disclaimer/Publisher’s Note: The statements, opinions and data contained in all publications are solely those of the individual
+author(s) and contributor(s) and not of MDPI and/or the editor(s). MDPI and/or the editor(s) disclaim responsibility for any injury to
+people or property resulting from any ideas, methods, instructions or products referred to in the content.
+
+https://doi.org/10.3390/app16020563
+
+
